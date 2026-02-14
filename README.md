@@ -76,6 +76,18 @@ This app is deployed on GitHub Pages and requires **no installation**!
 
 > **🔒 Security Note**: Your API key is stored in browser localStorage and is never transmitted to any third-party servers. All API calls go directly from your browser to Google's Gemini API.
 
+### Deploying to GitHub Pages
+
+This repository is configured to deploy with **GitHub Actions** using `.github/workflows/deploy.yml`.
+
+1. Go to **Settings → Pages** in your GitHub repository.
+2. Set **Source** to **GitHub Actions**.
+3. Push your changes to the `main` branch.
+4. Open the **Actions** tab and wait for **Deploy to GitHub Pages** to finish.
+5. After it succeeds, open: `https://<your-username>.github.io/Idea-To-SVG/`
+
+> **Important**: `vite.config.ts` already includes `base: "/Idea-To-SVG/"`, which is required for project-site URLs like `/<repo-name>/`.
+
 ### Prerequisites for Local Development
 
 - **Node.js** (v18 or higher)
