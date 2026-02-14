@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [react()],
+      base: "/Idea-To-SVG/",
       define: {
         // Only include dev fallback in development mode
         ...(mode === 'development' && env.GEMINI_API_KEY ? {
