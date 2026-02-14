@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Key, AlertCircle } from 'lucide-react';
-import { setApiKey, ApiKeyError } from '../services/apiKeyStorage';
+import { setApiKey, ApiKeyError, loadApiKey } from '../services/apiKeyStorage';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
@@ -47,7 +47,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved }
       onClick={(e) => {
         // Allow closing only if a key was previously set (so users can't skip initial setup)
         if (e.target === e.currentTarget) {
-          const hasKey = localStorage.getItem('gemini_api_key');
+          const hasKey = loadApiKey();
           if (hasKey) onClose();
         }
       }}
@@ -57,7 +57,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved }
         onClick={e => e.stopPropagation()}
       >
         {/* Close Button - only show if user already has a key set */}
-        {localStorage.getItem('gemini_api_key') && (
+        {loadApiKey() && (
           <button 
             onClick={onClose} 
             className="absolute top-4 right-4 p-2 bg-muted/20 hover:bg-muted/50 rounded-full transition-colors text-foreground"

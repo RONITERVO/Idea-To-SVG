@@ -18,7 +18,7 @@ const getApiKey = (): string => {
   }
 };
 
-let ai: GoogleGenAI;
+let ai: GoogleGenAI | undefined;
 
 // Initialize the API client lazily
 const getAI = (): GoogleGenAI => {
@@ -30,7 +30,7 @@ const getAI = (): GoogleGenAI => {
 
 // Reset the API client (useful when API key changes)
 export const resetAI = (): void => {
-  ai = null as any;
+  ai = undefined;
 };
 
 const cleanSVGCode = (text: string): string => {
