@@ -1,9 +1,37 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { getApiKeyOrThrow } from './apiKeyStorage';
 
 const MODEL_REASONING = 'gemini-3-pro-preview';
 const MODEL_VISION = 'gemini-3-pro-preview'; 
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Get API key from storage or use dev fallback in development only
+const getApiKey = (): string => {
+  try {
+    return getApiKeyOrThrow();
+  } catch (e) {
+    // Only allow fallback in development mode
+    if (import.meta.env.DEV && import.meta.env.VITE_GEMINI_API_KEY) {
+      console.warn('Using development fallback API key');
+      return import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    throw e;
+  }
+};
+
+let ai: GoogleGenAI;
+
+// Initialize the API client lazily
+const getAI = (): GoogleGenAI => {
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey: getApiKey() });
+  }
+  return ai;
+};
+
+// Reset the API client (useful when API key changes)
+export const resetAI = (): void => {
+  ai = null as any;
+};
 
 const cleanSVGCode = (text: string): string => {
   let clean = text;
@@ -110,7 +138,7 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
 
 export const planSVG = async (userPrompt: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `You are an expert SVG artist and planner. 
       The user has provided an ambiguous prompt: "${userPrompt}".
@@ -131,7 +159,7 @@ export const planSVG = async (userPrompt: string): Promise<string> => {
 
 export const generateInitialSVG = async (plan: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `Create a single SVG file based on this plan: "${plan}".
       
@@ -153,7 +181,7 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
   return retryOperation(async () => {
     const base64Data = imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_VISION,
       contents: {
         parts: [
@@ -188,7 +216,7 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
 
 export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `You are an expert SVG Coder.
       

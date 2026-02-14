@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AppPhase, GenerationState, SVGVersion } from './types';
 import * as db from './services/db';
 import * as gemini from './services/gemini';
+import { loadApiKey, ApiKeyError } from './services/apiKeyStorage';
 import { SVGCanvasHandle } from './components/SVGCanvas';
 
 import Header from './components/Header';
@@ -11,6 +12,7 @@ import Gallery from './components/Gallery';
 import Modal from './components/Modal';
 import ManualEntry from './components/ManualEntry';
 import SketchSvgFilters from './components/SketchSvgFilters';
+import ApiKeyModal from './components/ApiKeyModal';
 
 const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
@@ -25,6 +27,10 @@ const App: React.FC = () => {
   const [versions, setVersions] = useState<SVGVersion[]>([]);
   const [currentSVG, setCurrentSVG] = useState<string>('');
   const [viewingVersion, setViewingVersion] = useState<SVGVersion | null>(null);
+  
+  // API Key State
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
   
   // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -48,6 +54,13 @@ const App: React.FC = () => {
       }
     };
     loadHistory();
+
+    // Check for API key on mount
+    const apiKey = loadApiKey();
+    setHasApiKey(!!apiKey);
+    if (!apiKey) {
+      setIsApiKeyModalOpen(true);
+    }
   }, []);
 
   // Sync viewingVersion with versions list (allows live updates in modal)
@@ -213,6 +226,15 @@ const App: React.FC = () => {
 
       } catch (e: any) {
           console.error("Loop Error", e);
+          
+          // Check if it's an API key error
+          if (e instanceof ApiKeyError) {
+              stopLoop();
+              setIsApiKeyModalOpen(true);
+              updatePhase(AppPhase.STOPPED, { error: e.message });
+              return;
+          }
+          
           if (isLoopingRef.current) {
              setState(prev => ({...prev, error: `Interruption detected: ${e.message || 'Unknown error'}. Retrying in 5s...` }));
              setTimeout(runRefinementLoop, 5000); 
@@ -225,6 +247,12 @@ const App: React.FC = () => {
   const startLoop = () => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
+    
+    // Check for API key before starting
+    if (!hasApiKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
 
     setPrompt(trimmed);
     promptRef.current = trimmed;
@@ -247,6 +275,15 @@ const App: React.FC = () => {
     
     runRefinementLoop();
   };
+
+  const handleApiKeySaved = () => {
+    setHasApiKey(true);
+    gemini.resetAI(); // Reset the API client to use the new key
+  };
+
+  const handleOpenApiKeyModal = () => {
+    setIsApiKeyModalOpen(true);
+  };
   
   return (
     <div className="min-h-screen p-4 md:p-10 overflow-x-hidden relative">
@@ -266,7 +303,7 @@ const App: React.FC = () => {
       </div>
 
       <div className="max-w-[1200px] mx-auto relative z-10">
-        <Header />
+        <Header onOpenApiKeyModal={handleOpenApiKeyModal} />
         
         <ActiveStage 
             phase={state.phase}
@@ -311,6 +348,12 @@ const App: React.FC = () => {
       <Modal 
         version={viewingVersion} 
         onClose={() => setViewingVersion(null)} 
+      />
+
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onKeySaved={handleApiKeySaved}
       />
     </div>
   );

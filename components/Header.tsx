@@ -1,6 +1,11 @@
 import React from 'react';
+import { Key } from 'lucide-react';
 
-const Header: React.FC = () => {
+interface HeaderProps {
+  onOpenApiKeyModal: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ onOpenApiKeyModal }) => {
   return (
     <header className="mb-12 flex flex-col md:flex-row items-center justify-between gap-4 animate-sketch-in">
       <div className="flex items-center gap-3">
@@ -25,10 +30,21 @@ const Header: React.FC = () => {
         </div>
       </div>
       
-      <div className="hidden md:block">
-        <svg width="100" height="20" viewBox="0 0 100 20">
-           <path d="M0 10 Q25 0 50 10 T100 10" stroke="currentColor" strokeWidth="1" fill="none" className="text-muted-foreground/30" />
-        </svg>
+      <div className="flex items-center gap-4">
+        <button
+          onClick={onOpenApiKeyModal}
+          className="p-2 text-muted-foreground hover:text-foreground transition-colors hover:bg-muted/30 rounded-lg"
+          title="Manage API Key"
+          aria-label="Manage API Key"
+        >
+          <Key size={20} />
+        </button>
+        
+        <div className="hidden md:block">
+          <svg width="100" height="20" viewBox="0 0 100 20">
+             <path d="M0 10 Q25 0 50 10 T100 10" stroke="currentColor" strokeWidth="1" fill="none" className="text-muted-foreground/30" />
+          </svg>
+        </div>
       </div>
     </header>
   );

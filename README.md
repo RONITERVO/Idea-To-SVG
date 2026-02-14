@@ -63,12 +63,25 @@ All iterations are automatically saved to a beautiful sketchpad-inspired gallery
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Using GitHub Pages (Recommended for End Users)
+
+This app is deployed on GitHub Pages and requires **no installation**! 
+
+1. **Visit the App**: Navigate to the deployed GitHub Pages URL
+2. **Enter Your API Key**: On first visit, you'll be prompted to enter your Gemini API key
+   - Get a free API key at [Google AI Studio](https://ai.google.dev/)
+   - Your key is stored **locally in your browser** and never sent to our servers
+   - The key remains private and is only used for direct API calls to Google's Gemini service
+3. **Start Creating**: Once your key is set, you can start generating SVG graphics!
+
+> **🔒 Security Note**: Your API key is stored in browser localStorage and is never transmitted to any third-party servers. All API calls go directly from your browser to Google's Gemini API.
+
+### Prerequisites for Local Development
 
 - **Node.js** (v18 or higher)
 - **Gemini API Key** - Get yours free at [Google AI Studio](https://ai.google.dev/)
 
-### Installation
+### Installation for Local Development
 
 ```bash
 # Clone the repository
@@ -78,14 +91,16 @@ cd Idea-To-SVG
 # Install dependencies
 npm install
 
-# Set up your API key
+# (Optional) Set up a dev fallback API key for local development only
 echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env.local
 
 # Start the development server
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173`
+The app will be available at `http://localhost:3000`
+
+> **Note**: The `.env.local` file is optional for local development. The app will work the same way as in production, prompting you to enter your API key through the UI. The fallback is only used if no key is found in localStorage during development.
 
 ### Build for Production
 
@@ -97,9 +112,24 @@ npm run build
 npm run preview
 ```
 
+> **Production Builds**: Production builds are completely free of embedded API keys. Users must provide their own API key through the UI, which is stored in browser localStorage.
+
 ---
 
 ## 📖 How to Use
+
+### Setting Up Your API Key
+
+1. **First Time Setup**: When you first open the app, you'll see a modal prompting you to enter your Gemini API key
+2. **Getting an API Key**: 
+   - Visit [Google AI Studio](https://ai.google.dev/)
+   - Sign in with your Google account
+   - Create or select a project
+   - Generate an API key (starts with "AIza")
+3. **Enter Your Key**: Paste your API key into the modal and click "Save Key"
+4. **Managing Your Key**: Click the key icon (🔑) in the header to view or update your API key at any time
+
+### Creating SVG Graphics
 
 1. **Enter Your Idea**: Type any ambiguous prompt into the sketchpad (e.g., "a peaceful forest", "abstract energy", "geometric harmony")
 
