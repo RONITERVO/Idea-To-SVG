@@ -79,7 +79,7 @@ cd Idea-To-SVG
 npm install
 
 # Set up your API key
-echo "API_KEY=your_gemini_api_key_here" > .env.local
+echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env.local
 
 # Start the development server
 npm run dev
@@ -194,10 +194,10 @@ The loop continues indefinitely, with each iteration:
 Create a `.env.local` file in the root directory:
 
 ```env
-API_KEY=your_gemini_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-> **Note**: The app uses `process.env.API_KEY` internally. Make sure your build tool (Vite) is configured to expose this variable.
+> **Note**: Vite automatically loads this variable and maps it to `process.env.API_KEY` internally (see `vite.config.ts`).
 
 ### Customization
 
@@ -271,7 +271,7 @@ max delay: 8 seconds
 **Problem**: "API call failed" messages appear
 
 **Solutions**:
-- Verify your `API_KEY` in `.env.local` is correct
+- Verify your `GEMINI_API_KEY` in `.env.local` is correct
 - Check your Gemini API quota at [Google AI Studio](https://ai.google.dev/)
 - Ensure you have internet connectivity
 - Wait for automatic retry (app retries 3 times with backoff)
