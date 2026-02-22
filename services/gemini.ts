@@ -1,9 +1,37 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { getApiKeyOrThrow } from './apiKeyStorage';
 
-const MODEL_REASONING = 'gemini-3.1-pro-preview';
-const MODEL_VISION = 'gemini-3.1-pro-preview'; 
+const MODEL_REASONING = 'gemini-3-pro-preview';
+const MODEL_VISION = 'gemini-3-pro-preview'; 
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Get API key from storage or use dev fallback in development only
+const getApiKey = (): string => {
+  try {
+    return getApiKeyOrThrow();
+  } catch (e) {
+    // Only allow fallback in development mode
+    if (import.meta.env.DEV && import.meta.env.VITE_GEMINI_API_KEY) {
+      console.warn('Using development fallback API key');
+      return import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    throw e;
+  }
+};
+
+let ai: GoogleGenAI | undefined;
+
+// Initialize the API client lazily
+const getAI = (): GoogleGenAI => {
+  if (!ai) {
+    ai = new GoogleGenAI({ apiKey: getApiKey() });
+  }
+  return ai;
+};
+
+// Reset the API client (useful when API key changes)
+export const resetAI = (): void => {
+  ai = undefined;
+};
 
 const cleanSVGCode = (text: string): string => {
   let clean = text;
@@ -110,7 +138,7 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
 
 export const planSVG = async (userPrompt: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `You are an expert SVG artist and planner. 
       The user has provided an ambiguous prompt: "${userPrompt}".
@@ -119,6 +147,7 @@ export const planSVG = async (userPrompt: string): Promise<string> => {
       2. Create a detailed technical plan for an SVG that embodies this concept. 
       3. Focus on composition, color palette, and shapes.
       4. Keep the SVG complexity manageable but visually striking.
+      5. Consider whether CSS keyframe animations would enhance the concept (e.g., for characters in motion, spinning elements, pulsing effects, or any dynamic subject). If animation would add value, include it in the plan.
       
       Output the plan as a concise paragraph.`,
       config: {
@@ -131,7 +160,7 @@ export const planSVG = async (userPrompt: string): Promise<string> => {
 
 export const generateInitialSVG = async (plan: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `Create a single SVG file based on this plan: "${plan}".
       
@@ -139,7 +168,10 @@ export const generateInitialSVG = async (plan: string): Promise<string> => {
       - Use standard SVG syntax.
       - Ensure it is scalable (viewBox).
       - Use vibrant colors and clean paths.
-      - Do not use external CSS or scripts.
+      - Do not use external CSS files or JavaScript. Inline styles are fine.
+      - If the plan calls for animation or motion, use CSS keyframe animations inside a <defs><style> block.
+      - For animations, set appropriate transform-origin values and use smooth easing functions (ease-in-out).
+      - For animations, only animate SVG-safe properties (transform, opacity, fill, stroke).
       - Return ONLY the SVG code.`,
       config: {
         thinkingConfig: { thinkingBudget: 2048 }
@@ -153,7 +185,7 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
   return retryOperation(async () => {
     const base64Data = imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_VISION,
       contents: {
         parts: [
@@ -172,6 +204,7 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
                 1. Alignment with the prompt.
                 2. Visual aesthetics (balance, color, contrast).
                 3. Technical execution (if visible artifacts exist).
+                4. Animation quality (if present): smoothness, realism, and whether the motion enhances or distracts from the design.
                 
                 Be harsh but constructive. Point out exactly what looks wrong, amateurish, or broken.
                 Limit your critique to 3-4 concise, actionable bullet points.`
@@ -188,7 +221,7 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
 
 export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string): Promise<string> => {
   return retryOperation(async () => {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: MODEL_REASONING,
       contents: `You are an expert SVG Coder.
       
@@ -206,6 +239,8 @@ export const refineSVG = async (currentSvgCode: string, critique: string, origin
       Rewrite the SVG code to fix the issues mentioned in the critique and improve the overall quality.
       - Keep the code clean and efficient.
       - Ensure valid XML.
+      - If the current SVG uses CSS keyframe animations, preserve and improve them. Do not remove animation unless the critique explicitly asks for it.
+      - Do not use external CSS files or JavaScript.
       - Return ONLY the new SVG code.`,
       config: {
         thinkingConfig: { thinkingBudget: 4096 }
