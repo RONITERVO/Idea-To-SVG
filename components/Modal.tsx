@@ -65,7 +65,8 @@ const Modal: React.FC<ModalProps> = ({ version, onClose }) => {
                             <h3 className="font-sketch text-2xl text-accent mb-2 flex items-center gap-2">
                                 <MessageSquare size={20} /> Critique
                             </h3>
-                            <div className="font-hand text-lg leading-relaxed text-foreground/80 bg-white/50 p-4 rounded-lg border border-border">
+                            {/* Notice the added max-h-[200px], overflow-y-auto, and custom-scrollbar */}
+                            <div className="font-hand text-lg leading-relaxed text-foreground/80 bg-white/50 p-4 rounded-lg border border-border max-h-[200px] overflow-y-auto custom-scrollbar">
                                 {version.critique}
                             </div>
                         </div>
