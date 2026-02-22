@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
-    const isCapacitor = process.env.BUILD_TARGET === 'capacitor';
+    const buildTarget = process.env.BUILD_TARGET ?? env.BUILD_TARGET;
+    const isCapacitor = buildTarget === 'capacitor';
     return {
       server: {
         port: 3000,

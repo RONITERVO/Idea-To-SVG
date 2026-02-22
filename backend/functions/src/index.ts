@@ -32,6 +32,7 @@ const OUTPUT_ESTIMATES: Record<string, number> = {
 
 const MODEL = "gemini-2.5-flash";
 const ENFORCE_APP_CHECK = process.env.ENFORCE_APP_CHECK === "true";
+export const ANDROID_PACKAGE_NAME = "com.ronitervo.ideatesvg";
 
 const purchaseDocIdFromToken = (purchaseToken: string): string => {
   return createHash("sha256").update(purchaseToken).digest("hex");
@@ -60,7 +61,7 @@ const consumePurchase = async (
 ): Promise<void> => {
   try {
     await androidPublisher.purchases.products.consume({
-      packageName: "com.ronitervo.ideatesvg",
+      packageName: ANDROID_PACKAGE_NAME,
       productId,
       token: purchaseToken,
     });
@@ -191,7 +192,7 @@ export const verifyAndCreditPurchase = onCall(
       const androidPublisher = google.androidpublisher({ version: "v3", auth });
 
       const verification = await androidPublisher.purchases.products.get({
-        packageName: "com.ronitervo.ideatesvg",
+        packageName: ANDROID_PACKAGE_NAME,
         productId: productId,
         token: purchaseToken,
       });
@@ -378,7 +379,7 @@ export const getBalance = onCall(
 // ===== GENERATE WITH TOKENS =====
 
 export const generateWithTokens = onCall(
-  { enforceAppCheck: ENFORCE_APP_CHECK, timeoutSeconds: 300 },
+  { enforceAppCheck: ENFORCE_APP_CHECK, timeoutSeconds: 540 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in");
@@ -463,6 +464,34 @@ export const generateWithTokens = onCall(
 
 // ===== PROMPT BUILDERS =====
 
+type PromptPart = {
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
+  text?: string;
+};
+
+type PromptContents = string | { parts: PromptPart[] };
+
+const sanitizePromptInput = (value: string | undefined, maxLength = 12_000): string => {
+  if (!value) return "";
+
+  const withoutControlChars = value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .replace(/\r\n/g, "\n");
+  const withoutDirectiveLines = withoutControlChars
+    .split("\n")
+    .filter((line) => !/^\s*(system|assistant|developer|instruction)\s*:/i.test(line))
+    .join("\n");
+
+  return withoutDirectiveLines
+    .replace(/<\s*\/?\s*(system|assistant|developer|instruction)[^>]*>/gi, "")
+    .replace(/```/g, "'''")
+    .trim()
+    .slice(0, maxLength);
+};
+
 function buildPromptForAction(
   action: string,
   params: {
@@ -473,7 +502,7 @@ function buildPromptForAction(
     iteration?: number;
     imageBase64?: string;
   }
-): any {
+): PromptContents {
   switch (action) {
     case "plan":
       return `You are an expert SVG artist and planner.
@@ -504,7 +533,7 @@ function buildPromptForAction(
       if (!params.imageBase64) {
         throw new HttpsError("invalid-argument", "imageBase64 required for evaluate");
       }
-      const base64Data = params.imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
+      const base64Data = params.imageBase64.replace(/^data:image\/[^;]+;base64,/i, "").trim();
       return {
         parts: [
           {
@@ -531,18 +560,22 @@ function buildPromptForAction(
       };
     }
 
-    case "refine":
+    case "refine": {
+      const sanitizedPrompt = sanitizePromptInput(params.prompt, 2_000);
+      const sanitizedSvgCode = sanitizePromptInput(params.svgCode, 30_000);
+      const sanitizedCritique = sanitizePromptInput(params.critique, 5_000);
+
       return `You are an expert SVG Coder.
 
-      Original Goal: "${params.prompt}"
+      Original Goal: "${sanitizedPrompt}"
 
       Current SVG Code:
       \`\`\`xml
-      ${params.svgCode}
+      ${sanitizedSvgCode}
       \`\`\`
 
       Critique to address:
-      ${params.critique}
+      ${sanitizedCritique}
 
       Task:
       Rewrite the SVG code to fix the issues mentioned in the critique and improve the overall quality.
@@ -551,6 +584,7 @@ function buildPromptForAction(
       - If the current SVG uses CSS keyframe animations, preserve and improve them.
       - Do not use external CSS files or JavaScript.
       - Return ONLY the new SVG code.`;
+    }
 
     default:
       throw new HttpsError("invalid-argument", `Unknown action: ${action}`);
@@ -567,28 +601,32 @@ export const deleteMyAccount = onCall(
     }
 
     const uid = request.auth.uid;
+    try {
+      // Delete Firebase Auth account first to avoid partial account removal on auth failure.
+      await admin.auth().deleteUser(uid);
 
-    // Delete user-owned purchase records in batches.
-    while (true) {
-      const purchasesSnap = await db
-        .collection("purchases")
-        .where("uid", "==", uid)
-        .limit(200)
-        .get();
+      // Delete user-owned purchase records in batches.
+      while (true) {
+        const purchasesSnap = await db
+          .collection("purchases")
+          .where("uid", "==", uid)
+          .limit(200)
+          .get();
 
-      if (purchasesSnap.empty) break;
+        if (purchasesSnap.empty) break;
 
-      const batch = db.batch();
-      purchasesSnap.docs.forEach((doc) => batch.delete(doc.ref));
-      await batch.commit();
+        const batch = db.batch();
+        purchasesSnap.docs.forEach((doc) => batch.delete(doc.ref));
+        await batch.commit();
+      }
+
+      // Delete token balance/profile doc.
+      await db.collection("users").doc(uid).delete();
+
+      return { deleted: true };
+    } catch (error) {
+      console.error("deleteMyAccount failed:", { uid, error });
+      throw new HttpsError("internal", "Account deletion failed. Please retry.");
     }
-
-    // Delete token balance/profile doc.
-    await db.collection("users").doc(uid).delete().catch(() => {});
-
-    // Delete Firebase Auth account.
-    await admin.auth().deleteUser(uid);
-
-    return { deleted: true };
   }
 );

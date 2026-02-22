@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Coins, ShoppingCart, Loader2 } from 'lucide-react';
 import { queryProducts, purchaseProduct, TOKEN_AMOUNTS, type Product } from '../services/billing';
 import { verifyPurchase } from '../services/backendApi';
@@ -12,26 +12,62 @@ interface TokenPurchaseProps {
   onPurchaseComplete: () => void;
 }
 
+const PRODUCT_CACHE_TTL_MS = 5 * 60 * 1000;
+let cachedProducts: Product[] | null = null;
+let cachedProductsAt = 0;
+
 const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurchaseComplete }) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPurchasing, setIsPurchasing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const purchaseCompleteTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       loadProducts();
+      return;
+    }
+    if (purchaseCompleteTimerRef.current !== null) {
+      window.clearTimeout(purchaseCompleteTimerRef.current);
+      purchaseCompleteTimerRef.current = null;
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (purchaseCompleteTimerRef.current !== null) {
+        window.clearTimeout(purchaseCompleteTimerRef.current);
+        purchaseCompleteTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const loadProducts = async () => {
     setIsLoading(true);
     setError(null);
+
+    const now = Date.now();
+    if (cachedProducts && now - cachedProductsAt < PRODUCT_CACHE_TTL_MS) {
+      setProducts(cachedProducts);
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const prods = await queryProducts();
+      if (prods.length > 0) {
+        cachedProducts = prods;
+        cachedProductsAt = Date.now();
+      } else {
+        cachedProducts = null;
+        cachedProductsAt = 0;
+      }
       setProducts(prods);
     } catch (err: any) {
+      cachedProducts = null;
+      cachedProductsAt = 0;
       setError('Failed to load products. Please try again.');
     } finally {
       setIsLoading(false);
@@ -67,15 +103,27 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
       if (verification.alreadyCredited) {
         setSuccess('This purchase was already credited to your account.');
       } else {
-        const granted = verification.tokensGranted ?? tokenInfo.tokens;
+        const granted = verification.tokensGranted ?? tokenInfo?.tokens ?? 0;
         setSuccess(`Added ${formatTokens(granted)} tokens to your balance!`);
       }
 
-      setTimeout(() => {
+      if (purchaseCompleteTimerRef.current !== null) {
+        window.clearTimeout(purchaseCompleteTimerRef.current);
+      }
+      purchaseCompleteTimerRef.current = window.setTimeout(() => {
+        purchaseCompleteTimerRef.current = null;
         onPurchaseComplete();
       }, 1500);
     } catch (err: any) {
-      if (err.message?.includes('cancelled') || err.message?.includes('canceled')) {
+      const errorCode = err?.code || err?.errorCode;
+      const isCancelledCode =
+        errorCode === 'USER_CANCELLED' ||
+        errorCode === 'BILLING_1' ||
+        errorCode === 1;
+      const message = String(err?.message || '');
+      const isCancelledMessage = message.toLowerCase().includes('cancelled') || message.toLowerCase().includes('canceled');
+
+      if (isCancelledCode || isCancelledMessage) {
         // User cancelled - not an error
         setError(null);
       } else {

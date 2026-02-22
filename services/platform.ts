@@ -17,7 +17,7 @@ export const setAppMode = (mode: AppMode): void => {
   localStorage.setItem(MODE_KEY, mode);
 };
 
-export const useTokenMode = (): boolean => {
+export const isTokenMode = (): boolean => {
   const mode = getAppMode();
   if (mode === 'tokens') return true;
   if (mode === 'apikey') return false;

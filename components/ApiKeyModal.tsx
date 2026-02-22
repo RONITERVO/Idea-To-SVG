@@ -36,7 +36,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved, 
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && keyInput.trim()) {
       handleSave();
     }
@@ -97,7 +97,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved, 
               <strong>How to get your key:</strong>
             </p>
             <ol className="font-hand text-sm text-foreground/70 space-y-1 list-decimal list-inside">
-              <li>Visit <a href="https://ai.google.dev" target="_blank" rel="noopener noreferrer" className="text-accent underline hover:text-accent/80">ai.google.dev</a></li>
+              <li>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-accent underline hover:text-accent/80">Get key here</a></li>
               <li>Sign in with your Google account</li>
               <li>Create or select a project</li>
               <li>Generate an API key</li>
@@ -116,7 +116,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved, 
                 setKeyInput(e.target.value);
                 setError(null);
               }}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleKeyDown}
               placeholder="AIza..."
               className="w-full px-4 py-3 font-hand text-lg bg-background border-2 border-border rounded-lg focus:border-accent focus:outline-none transition-colors"
               autoFocus

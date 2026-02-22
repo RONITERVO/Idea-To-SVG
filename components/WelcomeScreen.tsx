@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Coins, Key, LogIn } from 'lucide-react';
 import { signInWithGoogle, AuthRedirectInProgressError } from '../services/auth';
-import { setAppMode } from '../services/platform';
+import { getAppMode, setAppMode } from '../services/platform';
 import { refreshBalance } from '../services/tokenManager';
 import { PRIVACY_POLICY_URL } from '../services/appConfig';
 import SketchSvgFilters from './SketchSvgFilters';
@@ -17,6 +17,8 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
   const handleTokenMode = async () => {
     setIsSigningIn(true);
     setError(null);
+    const previousMode = getAppMode();
+
     try {
       setAppMode('tokens');
       await signInWithGoogle();
@@ -26,6 +28,11 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
       if (err instanceof AuthRedirectInProgressError) {
         // Redirect flow continues in browser/webview and comes back to the app.
         return;
+      }
+      if (previousMode) {
+        setAppMode(previousMode);
+      } else {
+        setAppMode('apikey');
       }
       console.error('Sign in failed:', err);
       setError(err.message || 'Sign in failed. Please try again.');

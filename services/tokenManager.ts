@@ -2,7 +2,7 @@ import { getBalance as fetchBalance } from "./backendApi";
 
 type BalanceListener = (balance: number) => void;
 
-let cachedBalance: number = 0;
+let cachedBalance: number | null = null;
 let listeners: BalanceListener[] = [];
 
 export const refreshBalance = async (): Promise<number> => {
@@ -12,7 +12,7 @@ export const refreshBalance = async (): Promise<number> => {
   return balance;
 };
 
-export const getLocalBalance = (): number => cachedBalance;
+export const getLocalBalance = (): number | null => cachedBalance;
 
 export const updateLocalBalance = (newBalance: number): void => {
   cachedBalance = newBalance;
@@ -20,7 +20,7 @@ export const updateLocalBalance = (newBalance: number): void => {
 };
 
 export const canAfford = (estimatedCost: number): boolean => {
-  return cachedBalance >= estimatedCost;
+  return cachedBalance !== null && cachedBalance >= estimatedCost;
 };
 
 export const subscribeToBalance = (listener: BalanceListener): (() => void) => {
@@ -31,6 +31,7 @@ export const subscribeToBalance = (listener: BalanceListener): (() => void) => {
 };
 
 const notifyListeners = () => {
+  if (cachedBalance === null) return;
   listeners.forEach((l) => l(cachedBalance));
 };
 
@@ -40,6 +41,9 @@ export const formatTokens = (count: number): string => {
     return `${(count / 1_000_000).toFixed(1)}M`;
   }
   if (count >= 1_000) {
+    if (Math.round(count / 1_000) === 1_000) {
+      return `${(count / 1_000_000).toFixed(1)}M`;
+    }
     return `${(count / 1_000).toFixed(0)}K`;
   }
   return count.toString();

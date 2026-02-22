@@ -64,6 +64,9 @@ const AccountModal: React.FC<AccountModalProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-4 bg-background/60 backdrop-blur-sm animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="account-modal-title"
     >
       <div
         className="bg-card w-full md:max-w-lg md:sketchy-border rounded-t-3xl md:rounded-none p-6 md:p-8 relative shadow-2xl animate-sketch-in max-h-[90vh] overflow-y-auto"
@@ -82,7 +85,7 @@ const AccountModal: React.FC<AccountModalProps> = ({
             <UserCircle2 className="text-accent" size={28} />
           </div>
           <div>
-            <h2 className="font-sketch text-3xl text-foreground">Account</h2>
+            <h2 id="account-modal-title" className="font-sketch text-3xl text-foreground">Account</h2>
             <p className="font-hand text-sm text-muted-foreground">
               Manage sign-in and personal data
             </p>
@@ -166,7 +169,11 @@ const AccountModal: React.FC<AccountModalProps> = ({
         </div>
 
         {error && (
-          <div className="mt-4 p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
+          <div
+            className="mt-4 p-3 bg-destructive/10 border border-destructive/30 rounded-lg"
+            role="alert"
+            aria-live="assertive"
+          >
             <p className="font-hand text-sm text-destructive/90">{error}</p>
           </div>
         )}

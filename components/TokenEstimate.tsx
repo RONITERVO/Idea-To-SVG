@@ -29,6 +29,9 @@ const TokenEstimate: React.FC<TokenEstimateProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="token-estimate-title"
     >
       <div className="bg-card sketchy-border w-full max-w-md p-6 relative shadow-2xl animate-sketch-in"
         onClick={(e) => e.stopPropagation()}
@@ -37,7 +40,7 @@ const TokenEstimate: React.FC<TokenEstimateProps> = ({
           <div className="p-2 bg-accent/10 rounded-lg">
             <Calculator className="text-accent" size={24} />
           </div>
-          <h2 className="font-sketch text-2xl text-foreground">Token Estimate</h2>
+          <h2 id="token-estimate-title" className="font-sketch text-2xl text-foreground">Token Estimate</h2>
         </div>
 
         {isLoading ? (

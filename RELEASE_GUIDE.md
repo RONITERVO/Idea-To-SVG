@@ -82,14 +82,17 @@ You need these installed on your computer before anything else.
 ### Firebase CLI
 
 Open Command Prompt and run:
-```
+
+```text
 npm install -g firebase-tools
 ```
 
 Then log in:
-```
+
+```text
 firebase login
 ```
+
 This opens your browser — sign in with the Google account you want to use for Firebase.
 
 ---
@@ -97,7 +100,8 @@ This opens your browser — sign in with the Google account you want to use for 
 ## 2. Clone & Install the Project
 
 Open Command Prompt and run:
-```
+
+```text
 git clone https://github.com/RONITERVO/IdeaToSVG.git
 cd IdeaToSVG
 git checkout androidAppWithTokenPurchases
@@ -194,7 +198,8 @@ Firebase Functions require the **Blaze (pay-as-you-go)** plan. Don't worry — t
 ### Install Function Dependencies
 
 Open Command Prompt in your project folder:
-```
+
+```text
 cd backend/functions
 npm install
 cd ../..
@@ -217,7 +222,8 @@ Open `backend/.firebaserc` and replace `YOUR_FIREBASE_PROJECT_ID` with your actu
 ## 8. Deploy Firebase Backend
 
 From the project root, run:
-```
+
+```text
 cd backend
 firebase deploy
 ```
@@ -229,7 +235,8 @@ This deploys:
 Wait for it to say "Deploy complete!". Note any function URLs it prints.
 
 Go back to the project root:
-```
+
+```text
 cd ..
 ```
 
@@ -304,7 +311,9 @@ The backend verifies purchases with Google Play using Google Cloud service-accou
 8. Click **Done**
 9. Do **not** download a JSON key file for production unless absolutely necessary
 
-### Link Service Account to Play Console outdated
+### Link Service Account to Play Console
+
+If the API access UI has changed, use the Users and permissions flow immediately below.
 
 1. Go to https://play.google.com/console
 2. Click **Settings** (gear icon) > **API access**
@@ -365,7 +374,8 @@ No `service-account.json` file is required by this codebase for production.
 The keystore is used to sign your app. **Keep it safe — you cannot replace it once you upload to Play Store.**
 
 Open Command Prompt in your project folder and run:
-```
+
+```text
 cd android
 keytool -genkeypair -v -keystore release-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
 ```
@@ -379,7 +389,8 @@ It will ask you:
 This creates `android/release-keystore.jks`.
 
 Go back to the project root:
-```
+
+```text
 cd ..
 ```
 
@@ -401,10 +412,12 @@ keyPassword=the_password_you_chose
 ### Get SHA-1 for Firebase Google Sign-In
 
 Run this in Command Prompt:
-```
+
+```text
 cd android
 keytool -list -v -keystore release-keystore.jks -alias upload
 ```
+
 Enter your keystore password. Look for the **SHA1** line and copy the fingerprint (looks like `AB:CD:EF:12:34:...`).
 
 Now add it to Firebase:
@@ -413,27 +426,19 @@ Now add it to Firebase:
 3. Paste the SHA-1 fingerprint
 4. Click **Save**
 
-Will need java version 21 lets borrow that from android studio
-
-$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
-
-build
-npm run build:android
-npx cap sync android
-npm run cap:sync
-cd android
-./gradlew assembleRelease
-./gradlew assembleDebug
-(./gradlew bundleRelease) < LUO .ABB PLAY KAYPPA JULKAISUUN. VOI TEHDÄ MYÖHEMMIN
+Tip: Java 21 is required for current Android builds. If needed, use Android Studio's bundled JBR as your `JAVA_HOME` in your shell session.
 
 Also get the **debug SHA-1** (used for testing):
-```
+
+```text
 keytool -list -v -keystore "$env:USERPROFILE\.android\debug.keystore" -alias androiddebugkey -storepass android
 ```
+
 Add this SHA-1 to Firebase too.
 
 Go back to the project root:
-```
+
+```text
 cd ..
 ```
 
@@ -456,23 +461,27 @@ The server uses its own Gemini API key to make requests on behalf of token-payin
 The backend functions need your Gemini API key and (optionally) App Check enforcement settings.
 
 Create a file at `backend/functions/.env` with this content:
-```
+
+```text
 GEMINI_API_KEY=AIza_your_gemini_api_key_here
 ENFORCE_APP_CHECK=false
 ```
 
 For production hardening, after App Check is configured and tested, change:
-```
+
+```text
 ENFORCE_APP_CHECK=true
 ```
 
 If you enable App Check for web builds, also set in root `.env` or `.env.local`:
-```
+
+```text
 VITE_RECAPTCHA_SITE_KEY=your_recaptcha_v3_site_key
 ```
 
 Then re-deploy functions:
-```
+
+```text
 cd backend
 firebase deploy --only functions
 cd ..
@@ -483,12 +492,14 @@ cd ..
 ## 17. Build the Android App
 
 First, build the web app for Capacitor:
-```
+
+```text
 npm run build:android
 ```
 
 Then sync with the Android project:
-```
+
+```text
 npx cap sync android
 ```
 
@@ -516,7 +527,8 @@ This copies your built web files into the Android project and installs native pl
 ### Run the app
 
 Open the project in Android Studio:
-```
+
+```text
 npx cap open android
 ```
 
@@ -542,7 +554,8 @@ The app should open on the device. Test:
 Make sure you've set up your keystore (steps 13-14) before this.
 
 You can build from the command line:
-```
+
+```text
 npm run build:aab
 ```
 
@@ -554,7 +567,8 @@ Or from Android Studio:
 5. Click **Create**
 
 The output file will be at:
-```
+
+```text
 android/app/build/outputs/bundle/release/app-release.aab
 ```
 
@@ -627,11 +641,14 @@ You need a privacy policy URL. Options:
 - Enter the URL in the Privacy policy field
 
 Set the same URL in-app so users can access it from the account screen:
-```
+
+```text
 VITE_PRIVACY_POLICY_URL=https://your-domain.com/privacy
 ```
+
 Then rebuild and sync:
-```
+
+```text
 npm run cap:sync
 ```
 
@@ -683,9 +700,11 @@ For each update:
 ### Keeping the Web Version Working
 
 The web version continues to work with API keys as before:
-```
+
+```text
 npm run build:web
 ```
+
 This builds for web deployment (GitHub Pages, etc.).
 
 ---
@@ -753,3 +772,5 @@ Before building, make sure these files are configured:
 - [ ] `VITE_PRIVACY_POLICY_URL` is set for in-app privacy policy links
 
 **None of these should be committed to git.** They're all in `.gitignore`.
+
+

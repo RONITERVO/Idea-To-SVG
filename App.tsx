@@ -4,7 +4,7 @@ import { AppPhase, GenerationState, SVGVersion } from './types';
 import * as db from './services/db';
 import * as gemini from './services/gemini';
 import { loadApiKey, initApiKey, ApiKeyError } from './services/apiKeyStorage';
-import { useTokenMode as checkTokenMode } from './services/platform';
+import { isTokenMode as checkTokenMode } from './services/platform';
 import {
   onAuthStateChanged,
   getCurrentUser,
@@ -80,6 +80,7 @@ const App: React.FC = () => {
   const reconcilePendingPurchases = useCallback(async (uid: string) => {
     if (pendingRecoveryForUidRef.current === uid) return;
     pendingRecoveryForUidRef.current = uid;
+    let succeeded = false;
 
     try {
       const pending = await getPendingPurchases();
@@ -94,8 +95,13 @@ const App: React.FC = () => {
       }
 
       await refreshBalance().then(setTokenBalance);
+      succeeded = true;
     } catch (error) {
       console.error('Failed to reconcile pending purchases:', error);
+    } finally {
+      if (!succeeded && pendingRecoveryForUidRef.current === uid) {
+        pendingRecoveryForUidRef.current = null;
+      }
     }
   }, []);
 
@@ -343,7 +349,7 @@ const App: React.FC = () => {
           }
 
           // Check for insufficient tokens
-          if (e?.code === 'functions/resource-exhausted' || e?.message?.includes('Insufficient tokens')) {
+          if (e?.code === 'functions/resource-exhausted') {
               stopLoop();
               setIsPurchaseModalOpen(true);
               updatePhase(AppPhase.STOPPED, { error: 'Insufficient tokens. Purchase more to continue.' });
@@ -463,9 +469,27 @@ const App: React.FC = () => {
     stopLoop();
 
     try {
-      await deleteMyAccount();
-      await signOut().catch(() => {});
-      await db.clearHistory().catch(() => {});
+      try {
+        await deleteMyAccount();
+      } catch (error: any) {
+        console.error('Account deletion failed:', error);
+        throw new Error(error?.message || 'Account deletion failed. Please try again.');
+      }
+
+      try {
+        await signOut();
+      } catch (error: any) {
+        console.error('Sign out after account deletion failed:', error);
+        window.alert(error?.message || 'Account deleted, but sign out failed.');
+      }
+
+      try {
+        await db.clearHistory();
+      } catch (error: any) {
+        console.error('Local history cleanup after account deletion failed:', error);
+        window.alert(error?.message || 'Account deleted, but local history cleanup failed.');
+      }
+
       pendingRecoveryForUidRef.current = null;
       setTokenBalance(0);
       setVersions([]);

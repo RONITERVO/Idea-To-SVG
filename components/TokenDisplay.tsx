@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Coins } from 'lucide-react';
 import { getLocalBalance, subscribeToBalance, formatTokens } from '../services/tokenManager';
 
@@ -7,16 +7,30 @@ interface TokenDisplayProps {
 }
 
 const TokenDisplay: React.FC<TokenDisplayProps> = ({ onClick }) => {
-  const [balance, setBalance] = useState(getLocalBalance());
+  const [balance, setBalance] = useState<number>(getLocalBalance() ?? 0);
   const [animate, setAnimate] = useState(false);
+  const animationTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const unsubscribe = subscribeToBalance((newBalance) => {
       setBalance(newBalance);
       setAnimate(true);
-      setTimeout(() => setAnimate(false), 600);
+      if (animationTimeoutRef.current !== null) {
+        window.clearTimeout(animationTimeoutRef.current);
+      }
+      animationTimeoutRef.current = window.setTimeout(() => {
+        setAnimate(false);
+        animationTimeoutRef.current = null;
+      }, 600);
     });
-    return unsubscribe;
+
+    return () => {
+      unsubscribe();
+      if (animationTimeoutRef.current !== null) {
+        window.clearTimeout(animationTimeoutRef.current);
+        animationTimeoutRef.current = null;
+      }
+    };
   }, []);
 
   return (

@@ -1,5 +1,6 @@
 import { registerPlugin } from '@capacitor/core';
 import { isAndroid } from './platform';
+import { formatTokens } from './tokenManager';
 
 export interface Product {
   productId: string;
@@ -25,14 +26,6 @@ interface BillingPluginInterface {
 // Register the native plugin - will be available on Android, no-op on web
 const BillingPlugin = registerPlugin<BillingPluginInterface>('BillingPlugin');
 
-// Product IDs - must match Play Console configuration
-export const TOKEN_PRODUCT_IDS = [
-  'token_pack_tier1',
-  'token_pack_tier2',
-  'token_pack_tier3',
-  'token_pack_tier4',
-];
-
 // Token amounts per product (must match backend/functions/src/index.ts)
 export const TOKEN_AMOUNTS: Record<string, { tokens: number; label: string }> = {
   token_pack_tier1: { tokens: 100_000, label: 'Starter Pack' },
@@ -41,13 +34,16 @@ export const TOKEN_AMOUNTS: Record<string, { tokens: number; label: string }> = 
   token_pack_tier4: { tokens: 10_000_000, label: 'Power Pack' },
 };
 
+// Product IDs - derived from TOKEN_AMOUNTS so product metadata stays in sync.
+export const TOKEN_PRODUCT_IDS = Object.keys(TOKEN_AMOUNTS);
+
 export const queryProducts = async (): Promise<Product[]> => {
   if (!isAndroid()) {
     // Return mock products for web development/testing
     return TOKEN_PRODUCT_IDS.map(id => ({
       productId: id,
       title: TOKEN_AMOUNTS[id].label,
-      description: `${(TOKEN_AMOUNTS[id].tokens / 1000).toFixed(0)}K tokens`,
+      description: `${formatTokens(TOKEN_AMOUNTS[id].tokens)} tokens`,
       price: 'N/A',
       priceAmountMicros: 0,
       priceCurrencyCode: 'USD',

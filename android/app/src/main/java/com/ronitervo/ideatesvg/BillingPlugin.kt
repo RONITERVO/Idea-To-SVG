@@ -8,14 +8,13 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
-import kotlinx.coroutines.*
 
 @CapacitorPlugin(name = "BillingPlugin")
 class BillingPlugin : Plugin() {
 
     private var billingClient: BillingClient? = null
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var pendingPurchaseCall: PluginCall? = null
+    private val purchaseCallLock = Any()
 
     companion object {
         private const val TAG = "BillingPlugin"
@@ -47,28 +46,71 @@ class BillingPlugin : Plugin() {
     }
 
     private val purchasesUpdatedListener = PurchasesUpdatedListener { billingResult, purchases ->
-        val call = pendingPurchaseCall
-        pendingPurchaseCall = null
+        val call = synchronized(purchaseCallLock) {
+            val currentCall = pendingPurchaseCall
+            pendingPurchaseCall = null
+            currentCall
+        }
 
         when (billingResult.responseCode) {
             BillingClient.BillingResponseCode.OK -> {
                 if (purchases != null && purchases.isNotEmpty()) {
+                    if (purchases.size > 1) {
+                        Log.w(TAG, "Multiple purchases returned (${purchases.size}); aggregating all purchase metadata")
+                    }
+
                     val purchase = purchases[0]
+                    if (purchase.products.size > 1) {
+                        Log.w(
+                            TAG,
+                            "Multiple products returned for purchase ${purchase.purchaseToken}: ${purchase.products.size}"
+                        )
+                    }
+
+                    val purchaseSummaries = JSArray()
+                    val allProductIds = JSArray()
+                    for (entry in purchases) {
+                        val productIds = JSArray()
+                        for (productId in entry.products) {
+                            productIds.put(productId)
+                            allProductIds.put(productId)
+                        }
+
+                        val summary = JSObject().apply {
+                            put("purchaseToken", entry.purchaseToken)
+                            put("orderId", entry.orderId ?: "")
+                            put("productIds", productIds)
+                            put("productCount", entry.products.size)
+                        }
+                        purchaseSummaries.put(summary)
+                    }
+
                     val result = JSObject().apply {
                         put("purchaseToken", purchase.purchaseToken)
-                        put("productId", purchase.products[0])
+                        put("productId", purchase.products.firstOrNull() ?: "")
                         put("orderId", purchase.orderId ?: "")
+                        put("purchaseCount", purchases.size)
+                        put("productCount", allProductIds.length())
+                        put("productIds", allProductIds)
+                        put("purchases", purchaseSummaries)
                     }
-                    call?.resolve(result)
+                    if (call != null) {
+                        call.resolve(result)
+                    } else {
+                        Log.w(TAG, "Billing OK response received but no pending PluginCall was available")
+                    }
                 } else {
                     call?.reject("Purchase succeeded but no purchases returned")
                 }
             }
             BillingClient.BillingResponseCode.USER_CANCELED -> {
-                call?.reject("Purchase cancelled by user")
+                call?.reject("Purchase cancelled by user", "USER_CANCELLED")
             }
             else -> {
-                call?.reject("Purchase failed: ${billingResult.debugMessage}")
+                call?.reject(
+                    "Purchase failed: ${billingResult.debugMessage}",
+                    "BILLING_${billingResult.responseCode}"
+                )
             }
         }
     }
@@ -86,7 +128,7 @@ class BillingPlugin : Plugin() {
             ids.add(productIds.getString(i))
         }
 
-        ensureConnected {
+        ensureConnected(call) {
             val productList = ids.map { id ->
                 QueryProductDetailsParams.Product.newBuilder()
                     .setProductId(id)
@@ -126,6 +168,13 @@ class BillingPlugin : Plugin() {
 
     @PluginMethod
     fun purchaseProduct(call: PluginCall) {
+        synchronized(purchaseCallLock) {
+            if (pendingPurchaseCall != null) {
+                call.reject("Another purchase is in progress", "PURCHASE_IN_PROGRESS")
+                return
+            }
+        }
+
         val productId = call.getString("productId")
         if (productId == null) {
             call.reject("productId is required")
@@ -133,7 +182,7 @@ class BillingPlugin : Plugin() {
         }
         val obfuscatedAccountId = call.getString("obfuscatedAccountId")
 
-        ensureConnected {
+        ensureConnected(call) {
             // First query the product details
             val productList = listOf(
                 QueryProductDetailsParams.Product.newBuilder()
@@ -168,16 +217,44 @@ class BillingPlugin : Plugin() {
 
                 val flowParams = flowBuilder.build()
 
-                pendingPurchaseCall = call
                 val activity = this@BillingPlugin.activity
-                billingClient?.launchBillingFlow(activity, flowParams)
+                synchronized(purchaseCallLock) {
+                    if (pendingPurchaseCall != null) {
+                        call.reject("Another purchase is in progress", "PURCHASE_IN_PROGRESS")
+                        return@queryProductDetailsAsync
+                    }
+                    pendingPurchaseCall = call
+                }
+
+                val launchResult = billingClient?.launchBillingFlow(activity, flowParams)
+                if (launchResult == null) {
+                    synchronized(purchaseCallLock) {
+                        if (pendingPurchaseCall === call) {
+                            pendingPurchaseCall = null
+                        }
+                    }
+                    call.reject("Failed to launch billing flow", "BILLING_LAUNCH_FAILED")
+                    return@queryProductDetailsAsync
+                }
+
+                if (launchResult.responseCode != BillingClient.BillingResponseCode.OK) {
+                    synchronized(purchaseCallLock) {
+                        if (pendingPurchaseCall === call) {
+                            pendingPurchaseCall = null
+                        }
+                    }
+                    call.reject(
+                        "Failed to launch billing flow: ${launchResult.debugMessage}",
+                        "BILLING_${launchResult.responseCode}"
+                    )
+                }
             }
         }
     }
 
     @PluginMethod
     fun getPendingPurchases(call: PluginCall) {
-        ensureConnected {
+        ensureConnected(call) {
             val params = QueryPurchasesParams.newBuilder()
                 .setProductType(BillingClient.ProductType.INAPP)
                 .build()
@@ -203,26 +280,42 @@ class BillingPlugin : Plugin() {
         }
     }
 
-    private fun ensureConnected(action: () -> Unit) {
+    private fun ensureConnected(call: PluginCall, action: () -> Unit) {
+        val client = billingClient
+        if (client == null) {
+            call.reject("Billing client is not initialized", "BILLING_NOT_INITIALIZED")
+            return
+        }
+
         if (billingClient?.isReady == true) {
             action()
         } else {
-            billingClient?.startConnection(object : BillingClientStateListener {
+            var setupFinished = false
+            client.startConnection(object : BillingClientStateListener {
                 override fun onBillingSetupFinished(result: BillingResult) {
+                    setupFinished = true
                     if (result.responseCode == BillingClient.BillingResponseCode.OK) {
                         action()
+                    } else {
+                        call.reject(
+                            "Billing setup failed: ${result.debugMessage}",
+                            "BILLING_SETUP_${result.responseCode}"
+                        )
                     }
                 }
 
                 override fun onBillingServiceDisconnected() {
-                    Log.w(TAG, "Billing service disconnected during ensureConnected")
+                    if (!setupFinished) {
+                        call.reject("Billing service disconnected", "BILLING_DISCONNECTED")
+                        return
+                    }
+                    Log.w(TAG, "Billing service disconnected after setup during ensureConnected")
                 }
             })
         }
     }
 
     override fun handleOnDestroy() {
-        scope.cancel()
         billingClient?.endConnection()
         billingClient = null
         super.handleOnDestroy()

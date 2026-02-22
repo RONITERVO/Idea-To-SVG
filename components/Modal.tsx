@@ -2,7 +2,7 @@ import React from 'react';
 import { SVGVersion } from '../types';
 import { X, Copy, Download, MessageSquare } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgSanitizer';
-import { Capacitor } from '@capacitor/core';
+import { isWeb } from '../services/platform';
 
 interface ModalProps {
   version: SVGVersion | null;
@@ -87,7 +87,7 @@ const Modal: React.FC<ModalProps> = ({ version, onClose }) => {
                     </div>
                 </div>
 
-                {Capacitor.getPlatform() === "web" && (
+                {isWeb() && (
                     <div className="p-6 border-t border-border bg-background/50">
                         <button
                             onClick={downloadSVG}

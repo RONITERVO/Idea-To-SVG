@@ -32,6 +32,7 @@ yarn-error.log*
 
 # Android release artifacts
 android/keystore.properties
+android/local.properties
 android/*.jks
 android/app/build/
 android/.gradle/

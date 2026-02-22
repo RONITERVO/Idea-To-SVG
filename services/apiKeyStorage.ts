@@ -4,9 +4,9 @@
  * On Web: falls back to localStorage
  */
 
-import { Capacitor } from '@capacitor/core';
 import { SecureStorage } from '@aparajita/capacitor-secure-storage';
 import { Preferences } from '@capacitor/preferences';
+import { isNative } from './platform';
 
 const STORAGE_KEY = 'sketchai.geminiApiKey.v1';
 const LEGACY_STORAGE_KEY = 'gemini_api_key'; // old localStorage key
@@ -26,8 +26,6 @@ const isValidKeyFormat = (key: string): boolean => {
   const trimmed = key.trim();
   return trimmed.startsWith('AIza') && trimmed.length >= 35 && trimmed.length <= 45;
 };
-
-const isNative = (): boolean => Capacitor.isNativePlatform();
 
 /**
  * Load API key. Returns cached value if available, otherwise reads from storage.
@@ -83,6 +81,16 @@ export const initApiKey = async (): Promise<string | null> => {
         await Preferences.remove({ key: LEGACY_STORAGE_KEY });
         cachedKey = oldPrefsKey;
         return oldPrefsKey;
+      }
+
+      // Migrate old localStorage key on native into encrypted SecureStorage.
+      const localKey = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (localKey && isValidKeyFormat(localKey)) {
+        await SecureStorage.setItem(STORAGE_KEY, localKey);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+        await Preferences.remove({ key: LEGACY_STORAGE_KEY }).catch(() => {});
+        cachedKey = localKey;
+        return localKey;
       }
     } catch (e) {
       console.error('Failed to load API key from SecureStorage:', e);

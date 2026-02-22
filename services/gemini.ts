@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { GenerateContentParameters } from "@google/genai";
 import { getApiKeyOrThrow, loadApiKey } from './apiKeyStorage';
-import { useTokenMode } from './platform';
+import { isTokenMode } from './platform';
 import * as backendApi from './backendApi';
 import { updateLocalBalance } from './tokenManager';
 
@@ -183,8 +183,8 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
 };
 
 export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (useTokenMode() && !loadApiKey()) {
-    const result = await backendApi.generateWithTokens('plan', { prompt: userPrompt });
+  if (isTokenMode() && !loadApiKey()) {
+    const result = await retryOperation(() => backendApi.generateWithTokens('plan', { prompt: userPrompt }));
     updateLocalBalance(result.remainingBalance);
     return { text: result.text, thoughts: result.thoughts };
   }
@@ -210,8 +210,8 @@ export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): 
 };
 
 export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (useTokenMode() && !loadApiKey()) {
-    const result = await backendApi.generateWithTokens('generate', { plan });
+  if (isTokenMode() && !loadApiKey()) {
+    const result = await retryOperation(() => backendApi.generateWithTokens('generate', { plan }));
     updateLocalBalance(result.remainingBalance);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   }
@@ -239,18 +239,18 @@ export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallba
 };
 
 export const evaluateSVG = async (imageBase64: string, originalPrompt: string, iteration: number, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (useTokenMode() && !loadApiKey()) {
-    const result = await backendApi.generateWithTokens('evaluate', {
+  if (isTokenMode() && !loadApiKey()) {
+    const result = await retryOperation(() => backendApi.generateWithTokens('evaluate', {
       prompt: originalPrompt,
       imageBase64,
       iteration,
-    });
+    }));
     updateLocalBalance(result.remainingBalance);
     return { text: result.text, thoughts: result.thoughts };
   }
 
   return retryOperation(async () => {
-    const base64Data = imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
+    const base64Data = imageBase64.replace(/^data:image\/[^;]+;base64,/i, "").trim();
 
     return streamWithThoughts({
       model: MODEL_VISION,
@@ -286,12 +286,12 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
 };
 
 export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (useTokenMode() && !loadApiKey()) {
-    const result = await backendApi.generateWithTokens('refine', {
+  if (isTokenMode() && !loadApiKey()) {
+    const result = await retryOperation(() => backendApi.generateWithTokens('refine', {
       prompt: originalPrompt,
       svgCode: currentSvgCode,
       critique,
-    });
+    }));
     updateLocalBalance(result.remainingBalance);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   }
@@ -329,14 +329,23 @@ export const refineSVG = async (currentSvgCode: string, critique: string, origin
 // ===== TOKEN ESTIMATION =====
 
 export const estimateFullCycleCost = async (prompt: string): Promise<TokenEstimateResult> => {
-  if (useTokenMode() && !loadApiKey()) {
+  if (isTokenMode() && !loadApiKey()) {
+    const PLAN_MULTIPLIER = 4; // plan + generate + evaluate + refine input-token scale.
+    const OUTPUT_GENERATE_TOKENS = 3_000; // Typical generate output token budget.
+    const OUTPUT_EVALUATE_TOKENS = 500; // Typical evaluate output token budget.
+    const OUTPUT_REFINE_TOKENS = 3_000; // Typical refine output token budget.
+    const TOTAL_OVERHEAD = OUTPUT_GENERATE_TOKENS + OUTPUT_EVALUATE_TOKENS + OUTPUT_REFINE_TOKENS;
+
     // Estimate for a full cycle: plan + generate + evaluate + refine
     const planEstimate = await backendApi.estimateTokenCost('plan', { prompt });
-    // Rough multiplier for full cycle (plan is smallest part)
+    // Plan estimate plus additional stages, using named constants for maintainability.
     return {
-      estimatedInputTokens: planEstimate.estimatedInputTokens * 4,
-      estimatedOutputTokens: planEstimate.estimatedOutputTokens + 3000 + 500 + 3000,
-      estimatedTotal: planEstimate.estimatedTotal + 6500 + (planEstimate.estimatedInputTokens * 3),
+      estimatedInputTokens: planEstimate.estimatedInputTokens * PLAN_MULTIPLIER,
+      estimatedOutputTokens: planEstimate.estimatedOutputTokens + TOTAL_OVERHEAD,
+      estimatedTotal:
+        planEstimate.estimatedTotal +
+        TOTAL_OVERHEAD +
+        (planEstimate.estimatedInputTokens * (PLAN_MULTIPLIER - 1)),
     };
   }
 

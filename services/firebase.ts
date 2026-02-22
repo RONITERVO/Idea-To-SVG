@@ -1,17 +1,26 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
+import { getFunctions } from "firebase/functions";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC1Y-hko36nNXRnRfafFC4NAiS92WWsEJs",
-  authDomain: "ideatesvg.firebaseapp.com",
-  projectId: "ideatesvg",
-  storageBucket: "ideatesvg.firebasestorage.app",
-  messagingSenderId: "817682651209",
-  appId: "1:817682651209:web:3367429c621e50a7ae8798",
-  measurementId: "G-LRG0WG1NZ7"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "",
 };
+
+if (import.meta.env.PROD) {
+  const missing = Object.entries(firebaseConfig)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    throw new Error(`Missing Firebase config env vars in production: ${missing.join(", ")}`);
+  }
+}
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
