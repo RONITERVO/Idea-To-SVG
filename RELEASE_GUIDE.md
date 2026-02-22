@@ -165,14 +165,14 @@ const firebaseConfig = {
   appId: "1:123456789:web:abc123",
 };
 ```
-
+---Check---
 Save the file.
 
 ### Add Android app to Firebase
 
 1. Back in Firebase Console > Project Settings > Your apps
 2. Click **Add app** > click the **Android icon**
-3. Package name: `com.ideatosvg.app`
+3. Package name: `com.ronitervo.ideatesvg`
 4. App nickname: `Sketch AI Android`
 5. Skip the SHA-1 for now (we'll add it later for Google Sign-In)
 6. Click **Register app**

@@ -9,10 +9,10 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.ideatosvg.app"
+    namespace = "com.ronitervo.ideatesvg"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.ideatosvg.app"
+        applicationId "com.ronitervo.ideatesvg"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

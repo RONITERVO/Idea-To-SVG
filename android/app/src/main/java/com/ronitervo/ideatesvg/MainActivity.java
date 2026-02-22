@@ -1,4 +1,4 @@
-package com.ideatosvg.app;
+package com.ronitervo.ideatesvg;
 
 import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;

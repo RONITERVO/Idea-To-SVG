@@ -71,7 +71,7 @@ export const verifyAndCreditPurchase = onCall(
       const androidPublisher = google.androidpublisher({ version: "v3", auth });
 
       const verification = await androidPublisher.purchases.products.get({
-        packageName: "com.ideatosvg.app",
+        packageName: "com.ronitervo.ideatesvg",
         productId: productId,
         token: purchaseToken,
       });
@@ -115,7 +115,7 @@ export const verifyAndCreditPurchase = onCall(
 
       // Acknowledge purchase (consume it so user can buy again)
       await androidPublisher.purchases.products.acknowledge({
-        packageName: "com.ideatosvg.app",
+        packageName: "com.ronitervo.ideatesvg",
         productId: productId,
         token: purchaseToken,
       });

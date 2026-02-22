@@ -1,4 +1,4 @@
-package com.ideatosvg.app
+package com.ronitervo.ideatesvg
 
 import android.util.Log
 import com.android.billingclient.api.*

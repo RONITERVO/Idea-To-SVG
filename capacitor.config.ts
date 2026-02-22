@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.ideatosvg.app',
+  appId: 'com.ronitervo.ideatesvg',
   appName: 'Sketch AI',
   webDir: 'dist',
   server: {

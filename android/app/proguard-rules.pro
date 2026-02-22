@@ -29,4 +29,4 @@
 -keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
 
 # BillingPlugin
--keep class com.ideatosvg.app.BillingPlugin { *; }
+-keep class com.ronitervo.ideatesvg.BillingPlugin { *; }

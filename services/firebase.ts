@@ -2,14 +2,14 @@ import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
-// Replace with your Firebase project config from Firebase Console
 const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.firebasestorage.app",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyC1Y-hko36nNXRnRfafFC4NAiS92WWsEJs",
+  authDomain: "ideatesvg.firebaseapp.com",
+  projectId: "ideatesvg",
+  storageBucket: "ideatesvg.firebasestorage.app",
+  messagingSenderId: "817682651209",
+  appId: "1:817682651209:web:3367429c621e50a7ae8798",
+  measurementId: "G-LRG0WG1NZ7"
 };
 
 const app = initializeApp(firebaseConfig);
