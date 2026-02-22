@@ -178,7 +178,7 @@ npm run preview
 | **Frontend Framework** | React 19.2.4 with TypeScript |
 | **Build Tool** | Vite 6.2.0 |
 | **Styling** | Tailwind CSS (CDN) + Custom CSS |
-| **AI Model** | Google Gemini 3 Pro (`gemini-3-pro-preview`) |
+| **AI Model** | Google Gemini 3.1 Pro (`gemini-3.1-pro-preview`) |
 | **Storage** | IndexedDB (browser-local) |
 | **Icons** | Lucide React |
 | **Fonts** | Google Fonts (Caveat, Patrick Hand, Architects Daughter) |
