@@ -1,8 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { getApiKeyOrThrow } from './apiKeyStorage';
 
-const MODEL_REASONING = 'gemini-3-pro-preview';
-const MODEL_VISION = 'gemini-3-pro-preview'; 
+const MODEL_REASONING = 'gemini-3.1-pro-preview';
+const MODEL_VISION = 'gemini-3.1-pro-preview'; 
 
 // Get API key from storage or use dev fallback in development only
 const getApiKey = (): string => {
