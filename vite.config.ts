@@ -4,13 +4,14 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    const isCapacitor = process.env.BUILD_TARGET === 'capacitor';
     return {
       server: {
         port: 3000,
         host: '0.0.0.0',
       },
       plugins: [react()],
-      base: "/Idea-To-SVG/",
+      base: isCapacitor ? '/' : '/Idea-To-SVG/',
       define: {
         // Only include dev fallback in development mode
         ...(mode === 'development' && env.GEMINI_API_KEY ? {

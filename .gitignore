@@ -29,3 +29,14 @@ yarn-error.log*
 # Temporary files
 *.tmp
 .cache/
+
+# Android release artifacts
+android/keystore.properties
+android/*.jks
+android/app/build/
+android/.gradle/
+
+# Firebase backend
+backend/functions/node_modules/
+backend/functions/lib/
+backend/functions/.env

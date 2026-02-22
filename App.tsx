@@ -4,7 +4,11 @@ import { AppPhase, GenerationState, SVGVersion } from './types';
 import * as db from './services/db';
 import * as gemini from './services/gemini';
 import { loadApiKey, ApiKeyError } from './services/apiKeyStorage';
+import { useTokenMode as checkTokenMode } from './services/platform';
+import { onAuthStateChanged, getCurrentUser } from './services/auth';
+import { refreshBalance, getLocalBalance, subscribeToBalance } from './services/tokenManager';
 import { SVGCanvasHandle } from './components/SVGCanvas';
+import type { TokenEstimateResult } from './services/gemini';
 
 import Header from './components/Header';
 import ActiveStage from './components/ActiveStage';
@@ -13,6 +17,9 @@ import Modal from './components/Modal';
 import ManualEntry from './components/ManualEntry';
 import SketchSvgFilters from './components/SketchSvgFilters';
 import ApiKeyModal from './components/ApiKeyModal';
+import TokenEstimate from './components/TokenEstimate';
+import TokenPurchase from './components/TokenPurchase';
+import WelcomeScreen from './components/WelcomeScreen';
 
 const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
@@ -24,18 +31,31 @@ const App: React.FC = () => {
     plan: null,
     error: null,
   });
-  
+
   const [versions, setVersions] = useState<SVGVersion[]>([]);
   const [currentSVG, setCurrentSVG] = useState<string>('');
   const [viewingVersion, setViewingVersion] = useState<SVGVersion | null>(null);
-  
+
   // API Key State
   const [hasApiKey, setHasApiKey] = useState<boolean>(false);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
-  
+
+  // Token Mode State
+  const [isTokenMode, setIsTokenMode] = useState<boolean>(false);
+  const [tokenBalance, setTokenBalance] = useState<number>(0);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [showWelcome, setShowWelcome] = useState<boolean>(false);
+  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
+
+  // Token Estimation State
+  const [tokenEstimate, setTokenEstimate] = useState<TokenEstimateResult | null>(null);
+  const [isEstimating, setIsEstimating] = useState<boolean>(false);
+  const [showEstimate, setShowEstimate] = useState<boolean>(false);
+  const [pendingStart, setPendingStart] = useState<boolean>(false);
+
   // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  
+
   // Refs for Loop Control (to avoid stale closures in setTimeout)
   const isLoopingRef = useRef(false);
   const canvasRef = useRef<SVGCanvasHandle>(null);
@@ -56,12 +76,35 @@ const App: React.FC = () => {
     };
     loadHistory();
 
-    // Check for API key on mount
+    // Determine mode
     const apiKey = loadApiKey();
     setHasApiKey(!!apiKey);
-    if (!apiKey) {
+    const tokenMode = checkTokenMode();
+    setIsTokenMode(tokenMode);
+
+    if (!apiKey && !tokenMode) {
+      // Web user without key → show API key modal (existing behavior)
       setIsApiKeyModalOpen(true);
+    } else if (!apiKey && tokenMode) {
+      // Android user without key → show welcome screen
+      setShowWelcome(true);
     }
+
+    // Listen for auth state
+    const unsubAuth = onAuthStateChanged((user) => {
+      setIsAuthenticated(!!user);
+      if (user && tokenMode) {
+        refreshBalance().then(setTokenBalance).catch(console.error);
+      }
+    });
+
+    // Listen for balance changes
+    const unsubBalance = subscribeToBalance(setTokenBalance);
+
+    return () => {
+      unsubAuth();
+      unsubBalance();
+    };
   }, []);
 
   // Sync viewingVersion with versions list (allows live updates in modal)
@@ -95,9 +138,9 @@ const App: React.FC = () => {
           prompt: promptRef.current,
           thumbnail
       };
-      
+
       await db.saveVersion(newVersion);
-      
+
       setVersions(prev => {
           // Check if this ID already exists (update it), otherwise add new
           const index = prev.findIndex(v => v.id === id);
@@ -118,7 +161,7 @@ const App: React.FC = () => {
         critique: "Manually added via input.",
         iteration: versions.length + 1,
         prompt: "Manual Entry",
-        thumbnail: undefined 
+        thumbnail: undefined
     };
     await db.saveVersion(newVersion);
     setVersions(prev => [newVersion, ...prev]);
@@ -237,7 +280,7 @@ const App: React.FC = () => {
 
       } catch (e: any) {
           console.error("Loop Error", e);
-          
+
           // Check if it's an API key error
           if (e instanceof ApiKeyError) {
               stopLoop();
@@ -245,51 +288,103 @@ const App: React.FC = () => {
               updatePhase(AppPhase.STOPPED, { error: e.message });
               return;
           }
-          
+
+          // Check for insufficient tokens
+          if (e?.code === 'functions/resource-exhausted' || e?.message?.includes('Insufficient tokens')) {
+              stopLoop();
+              setIsPurchaseModalOpen(true);
+              updatePhase(AppPhase.STOPPED, { error: 'Insufficient tokens. Purchase more to continue.' });
+              return;
+          }
+
           if (isLoopingRef.current) {
              setState(prev => ({...prev, error: `Interruption detected: ${e.message || 'Unknown error'}. Retrying in 5s...` }));
-             setTimeout(runRefinementLoop, 5000); 
+             setTimeout(runRefinementLoop, 5000);
           } else {
              updatePhase(AppPhase.STOPPED, { error: e.message });
           }
       }
   };
 
-  const startLoop = () => {
+  const requestStartLoop = async () => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
-    
-    // Check for API key before starting
-    if (!hasApiKey) {
+
+    // Check if user has API key OR is in token mode with auth
+    const apiKey = loadApiKey();
+    if (!apiKey && !isTokenMode) {
       setIsApiKeyModalOpen(true);
       return;
     }
 
+    if (isTokenMode && !apiKey && !isAuthenticated) {
+      setShowWelcome(true);
+      return;
+    }
+
+    // Show token estimate before starting
+    setPendingStart(true);
+    setShowEstimate(true);
+    setIsEstimating(true);
+    setTokenEstimate(null);
+
+    try {
+      const estimate = await gemini.estimateFullCycleCost(trimmed);
+      setTokenEstimate(estimate);
+    } catch (err) {
+      console.error('Failed to estimate tokens:', err);
+      // Still allow starting even if estimation fails
+      setTokenEstimate({
+        estimatedInputTokens: 0,
+        estimatedOutputTokens: 0,
+        estimatedTotal: 0,
+      });
+    } finally {
+      setIsEstimating(false);
+    }
+  };
+
+  const confirmStart = () => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    setShowEstimate(false);
+    setPendingStart(false);
+    setTokenEstimate(null);
+
     setPrompt(trimmed);
     promptRef.current = trimmed;
     isLoopingRef.current = true;
-    
+
     // Reset state for a fresh run
     latestSVGRef.current = '';
     setCurrentSVG('');
     currentVersionIdRef.current = '';
     iterationRef.current = 0;
     phaseRef.current = AppPhase.IDLE;
-    
+
     setState({
         phase: AppPhase.PLANNING,
         currentIteration: 0,
         lastCritique: null,
-      lastThoughts: [],
+        lastThoughts: [],
         plan: null,
         error: null
     });
-    
+
     runRefinementLoop();
+  };
+
+  const cancelEstimate = () => {
+    setShowEstimate(false);
+    setPendingStart(false);
+    setTokenEstimate(null);
+    setIsEstimating(false);
   };
 
   const handleApiKeySaved = () => {
     setHasApiKey(true);
+    setIsTokenMode(false); // Switch to API key mode
     gemini.resetAI(); // Reset the API client to use the new key
   };
 
@@ -297,14 +392,35 @@ const App: React.FC = () => {
     setIsApiKeyModalOpen(true);
   };
 
+  const handleWelcomeComplete = (mode: 'tokens' | 'apikey') => {
+    setShowWelcome(false);
+    if (mode === 'apikey') {
+      setIsApiKeyModalOpen(true);
+      setIsTokenMode(false);
+    } else {
+      setIsTokenMode(true);
+      // Balance will be refreshed by auth state listener
+    }
+  };
+
+  const handlePurchaseComplete = () => {
+    setIsPurchaseModalOpen(false);
+    refreshBalance().then(setTokenBalance).catch(console.error);
+  };
+
   const isThinking = state.phase !== AppPhase.IDLE &&
                      state.phase !== AppPhase.STOPPED &&
                      state.phase !== AppPhase.RENDERING;
 
+  // Show welcome screen for first-time Android users
+  if (showWelcome) {
+    return <WelcomeScreen onComplete={handleWelcomeComplete} />;
+  }
+
   return (
     <div className="min-h-screen p-4 md:p-10 overflow-x-hidden relative">
       <SketchSvgFilters />
-      
+
       {/* Corner doodles */}
       <div className="absolute top-4 left-4 text-muted-foreground/10 hidden md:block pointer-events-none">
         <svg width="60" height="60" viewBox="0 0 60 60">
@@ -319,13 +435,17 @@ const App: React.FC = () => {
       </div>
 
       <div className="max-w-[1200px] mx-auto relative z-10">
-        <Header onOpenApiKeyModal={handleOpenApiKeyModal} />
-        
+        <Header
+          onOpenApiKeyModal={handleOpenApiKeyModal}
+          isTokenMode={isTokenMode && !hasApiKey}
+          onOpenPurchaseModal={() => setIsPurchaseModalOpen(true)}
+        />
+
         <ActiveStage
             phase={state.phase}
             prompt={prompt}
             setPrompt={setPrompt}
-            onStart={startLoop}
+            onStart={requestStartLoop}
             onStop={stopLoop}
             svgCode={currentSVG}
             canvasRef={canvasRef}
@@ -335,27 +455,27 @@ const App: React.FC = () => {
             plan={state.plan}
             iteration={state.currentIteration}
         />
-        
+
         {state.error && isLoopingRef.current && (
              <div className="mb-6 p-4 bg-yellow-50/50 border border-yellow-200 text-yellow-700 text-sm font-hand sketchy-border-thin animate-pulse">
-                ⚠ {state.error}
+                {state.error}
              </div>
         )}
 
-        <ManualEntry 
-            onAdd={handleManualAdd} 
-            onClear={() => {}} 
+        <ManualEntry
+            onAdd={handleManualAdd}
+            onClear={() => {}}
         />
 
-        <Gallery 
-            versions={versions} 
-            viewingId={viewingVersion?.id || null} 
-            onSelect={setViewingVersion} 
+        <Gallery
+            versions={versions}
+            viewingId={viewingVersion?.id || null}
+            onSelect={setViewingVersion}
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
             onDelete={deleteVersions}
         />
-        
+
         <footer className="mt-16 text-center">
           <p className="font-hand text-sm text-muted-foreground/40">
             ~ made with pencil shavings & pixels ~
@@ -363,15 +483,36 @@ const App: React.FC = () => {
         </footer>
       </div>
 
-      <Modal 
-        version={viewingVersion} 
-        onClose={() => setViewingVersion(null)} 
+      <Modal
+        version={viewingVersion}
+        onClose={() => setViewingVersion(null)}
       />
 
       <ApiKeyModal
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
         onKeySaved={handleApiKeySaved}
+      />
+
+      {showEstimate && (
+        <TokenEstimate
+          estimate={tokenEstimate}
+          balance={tokenBalance}
+          isTokenMode={isTokenMode && !hasApiKey}
+          isLoading={isEstimating}
+          onConfirm={confirmStart}
+          onCancel={cancelEstimate}
+          onBuyTokens={() => {
+            cancelEstimate();
+            setIsPurchaseModalOpen(true);
+          }}
+        />
+      )}
+
+      <TokenPurchase
+        isOpen={isPurchaseModalOpen}
+        onClose={() => setIsPurchaseModalOpen(false)}
+        onPurchaseComplete={handlePurchaseComplete}
       />
     </div>
   );

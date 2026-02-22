@@ -1,10 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { GenerateContentParameters } from "@google/genai";
-import { getApiKeyOrThrow } from './apiKeyStorage';
+import { getApiKeyOrThrow, loadApiKey } from './apiKeyStorage';
+import { useTokenMode } from './platform';
+import * as backendApi from './backendApi';
+import { updateLocalBalance } from './tokenManager';
 
 export interface GeminiResult {
   text: string;
   thoughts: string | null;
+}
+
+export interface TokenEstimateResult {
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedTotal: number;
 }
 
 export type ThoughtCallback = (thoughtChunk: string) => void;
@@ -174,6 +183,12 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
 };
 
 export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
+  if (useTokenMode() && !loadApiKey()) {
+    const result = await backendApi.generateWithTokens('plan', { prompt: userPrompt });
+    updateLocalBalance(result.remainingBalance);
+    return { text: result.text, thoughts: result.thoughts };
+  }
+
   return retryOperation(async () => {
     return streamWithThoughts({
       model: MODEL_REASONING,
@@ -195,6 +210,12 @@ export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): 
 };
 
 export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
+  if (useTokenMode() && !loadApiKey()) {
+    const result = await backendApi.generateWithTokens('generate', { plan });
+    updateLocalBalance(result.remainingBalance);
+    return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
+  }
+
   return retryOperation(async () => {
     const result = await streamWithThoughts({
       model: MODEL_REASONING,
@@ -218,6 +239,16 @@ export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallba
 };
 
 export const evaluateSVG = async (imageBase64: string, originalPrompt: string, iteration: number, onThought?: ThoughtCallback): Promise<GeminiResult> => {
+  if (useTokenMode() && !loadApiKey()) {
+    const result = await backendApi.generateWithTokens('evaluate', {
+      prompt: originalPrompt,
+      imageBase64,
+      iteration,
+    });
+    updateLocalBalance(result.remainingBalance);
+    return { text: result.text, thoughts: result.thoughts };
+  }
+
   return retryOperation(async () => {
     const base64Data = imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
@@ -255,6 +286,16 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
 };
 
 export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
+  if (useTokenMode() && !loadApiKey()) {
+    const result = await backendApi.generateWithTokens('refine', {
+      prompt: originalPrompt,
+      svgCode: currentSvgCode,
+      critique,
+    });
+    updateLocalBalance(result.remainingBalance);
+    return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
+  }
+
   return retryOperation(async () => {
     const result = await streamWithThoughts({
       model: MODEL_REASONING,
@@ -283,4 +324,43 @@ export const refineSVG = async (currentSvgCode: string, critique: string, origin
     }, onThought);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   });
+};
+
+// ===== TOKEN ESTIMATION =====
+
+export const estimateFullCycleCost = async (prompt: string): Promise<TokenEstimateResult> => {
+  if (useTokenMode() && !loadApiKey()) {
+    // Estimate for a full cycle: plan + generate + evaluate + refine
+    const planEstimate = await backendApi.estimateTokenCost('plan', { prompt });
+    // Rough multiplier for full cycle (plan is smallest part)
+    return {
+      estimatedInputTokens: planEstimate.estimatedInputTokens * 4,
+      estimatedOutputTokens: planEstimate.estimatedOutputTokens + 3000 + 500 + 3000,
+      estimatedTotal: planEstimate.estimatedTotal + 6500 + (planEstimate.estimatedInputTokens * 3),
+    };
+  }
+
+  // API key mode: use countTokens directly for informational estimate
+  try {
+    const ai = getAI();
+    const countResult = await ai.models.countTokens({
+      model: MODEL_REASONING,
+      contents: `Plan SVG for: "${prompt}"`,
+    });
+    const inputTokens = countResult.totalTokens || 0;
+    const estimatedTotal = (inputTokens * 4) + 7500; // rough full cycle
+    return {
+      estimatedInputTokens: inputTokens * 4,
+      estimatedOutputTokens: 7500,
+      estimatedTotal,
+    };
+  } catch {
+    // Fallback estimate based on prompt length
+    const roughTokens = Math.ceil(prompt.length / 4);
+    return {
+      estimatedInputTokens: roughTokens * 4 + 2000,
+      estimatedOutputTokens: 7500,
+      estimatedTotal: roughTokens * 4 + 9500,
+    };
+  }
 };
