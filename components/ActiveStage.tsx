@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AppPhase } from '../types';
 import SVGCanvas, { SVGCanvasHandle } from './SVGCanvas';
-import { Play, Square, PenTool, Eraser } from 'lucide-react';
+import { Play, Square, PenTool, Eraser, Brain, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface ActiveStageProps {
   phase: AppPhase;
@@ -12,6 +12,8 @@ interface ActiveStageProps {
   svgCode: string;
   canvasRef: React.RefObject<SVGCanvasHandle | null>;
   critique: string | null;
+  thoughts: string | null;
+  isThinking?: boolean;
   plan: string | null;
   iteration: number;
 }
@@ -25,18 +27,38 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
   svgCode,
   canvasRef,
   critique,
+  thoughts,
+  isThinking,
   plan,
   iteration
 }) => {
   const isIdle = phase === AppPhase.IDLE || phase === AppPhase.STOPPED;
   const terminalRef = useRef<HTMLDivElement>(null);
+  const thoughtsContentRef = useRef<HTMLDivElement>(null);
+  const [thoughtsExpanded, setThoughtsExpanded] = useState(false);
+  const prevThoughtsRef = useRef<string | null>(null);
+
+  // Auto-expand thoughts when a new stream begins (null -> non-null transition)
+  useEffect(() => {
+    if (thoughts && !prevThoughtsRef.current) {
+      setThoughtsExpanded(true);
+    }
+    prevThoughtsRef.current = thoughts;
+  }, [thoughts]);
+
+  // Auto-scroll thoughts container as new text streams in
+  useEffect(() => {
+    if (thoughtsContentRef.current && thoughtsExpanded) {
+      thoughtsContentRef.current.scrollTop = thoughtsContentRef.current.scrollHeight;
+    }
+  }, [thoughts, thoughtsExpanded]);
 
   // Auto-scroll terminal
   useEffect(() => {
     if (terminalRef.current) {
         terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
-  }, [critique, plan, phase, iteration]);
+  }, [critique, plan, phase, iteration, thoughts]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -136,6 +158,26 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
                         </div>
                     )}
                     
+                    {(thoughts || isThinking) && (
+                        <div className="animate-fade-in">
+                            <button
+                                onClick={() => setThoughtsExpanded(!thoughtsExpanded)}
+                                className="flex items-center gap-1.5 text-purple-600 font-bold mb-1 underline decoration-wavy decoration-purple-300/30 cursor-pointer hover:text-purple-700 transition-colors"
+                            >
+                                <Brain size={16} />
+                                <span>Thoughts</span>
+                                {isThinking && !thoughts && <span className="ml-2 text-xs text-purple-400 no-underline">(thinking...)</span>}
+                                {thoughtsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                            {thoughtsExpanded && (
+                                <div ref={thoughtsContentRef} className="text-foreground/60 text-base whitespace-pre-wrap bg-purple-50/50 rounded p-2 border border-dashed border-purple-200/50 max-h-[200px] overflow-y-auto custom-scrollbar">
+                                    {thoughts || <span className="text-purple-300 italic">Thinking...</span>}
+                                    {isThinking && <span className="inline-block w-1.5 h-4 bg-purple-400 ml-0.5 animate-pulse align-middle" />}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {plan && (
                         <div className="animate-fade-in relative">
                             <span className="text-accent font-bold block mb-1 underline decoration-wavy decoration-muted-foreground/30">Plan:</span>

@@ -243,23 +243,11 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 ### Customization
 
-#### Adjust AI Thinking Budgets
-
-In `services/gemini.ts`, you can modify thinking budgets for different phases:
-
-```typescript
-const config = {
-  thinkingConfig: { 
-    thinkingBudget: 4096  // Increase for more thorough reasoning
-  }
-}
-```
-
 #### Change Models
 
 ```typescript
-const MODEL_REASONING = 'gemini-3-pro-preview';
-const MODEL_VISION = 'gemini-3-pro-preview';
+const MODEL_REASONING = 'gemini-3.1-pro-preview';
+const MODEL_VISION = 'gemini-3.1-pro-preview';
 ```
 
 #### UI Theme Colors

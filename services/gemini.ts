@@ -1,5 +1,42 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import type { GenerateContentParameters } from "@google/genai";
 import { getApiKeyOrThrow } from './apiKeyStorage';
+
+export interface GeminiResult {
+  text: string;
+  thoughts: string | null;
+}
+
+export type ThoughtCallback = (accumulatedThoughts: string) => void;
+
+const streamWithThoughts = async (
+  params: GenerateContentParameters,
+  onThought?: ThoughtCallback
+): Promise<GeminiResult> => {
+  const stream = await getAI().models.generateContentStream(params);
+
+  let accumulatedText = '';
+  let accumulatedThoughts = '';
+
+  for await (const chunk of stream) {
+    const parts = chunk.candidates?.[0]?.content?.parts;
+    if (!parts) continue;
+
+    for (const part of parts) {
+      if (part.thought && part.text) {
+        accumulatedThoughts += part.text;
+        onThought?.(accumulatedThoughts);
+      } else if (part.text) {
+        accumulatedText += part.text;
+      }
+    }
+  }
+
+  return {
+    text: accumulatedText,
+    thoughts: accumulatedThoughts || null,
+  };
+};
 
 const MODEL_REASONING = 'gemini-3.1-pro-preview';
 const MODEL_VISION = 'gemini-3.1-pro-preview'; 
@@ -136,34 +173,33 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
   }
 };
 
-export const planSVG = async (userPrompt: string): Promise<string> => {
+export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
   return retryOperation(async () => {
-    const response = await getAI().models.generateContent({
+    return streamWithThoughts({
       model: MODEL_REASONING,
-      contents: `You are an expert SVG artist and planner. 
+      contents: `You are an expert SVG artist and planner.
       The user has provided an ambiguous prompt: "${userPrompt}".
-      
+
       1. Analyze the intent and potential artistic directions.
-      2. Create a detailed technical plan for an SVG that embodies this concept. 
+      2. Create a detailed technical plan for an SVG that embodies this concept.
       3. Focus on composition, color palette, and shapes.
       4. Keep the SVG complexity manageable but visually striking.
       5. Consider whether CSS keyframe animations would enhance the concept (e.g., for characters in motion, spinning elements, pulsing effects, or any dynamic subject). If animation would add value, include it in the plan.
-      
+
       Output the plan as a concise paragraph.`,
       config: {
-        thinkingConfig: { thinkingBudget: 1024 }
-      }
-    });
-    return response.text || "Failed to generate plan.";
+        thinkingConfig: { includeThoughts: true },
+      },
+    }, onThought);
   });
 };
 
-export const generateInitialSVG = async (plan: string): Promise<string> => {
+export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
   return retryOperation(async () => {
-    const response = await getAI().models.generateContent({
+    const result = await streamWithThoughts({
       model: MODEL_REASONING,
       contents: `Create a single SVG file based on this plan: "${plan}".
-      
+
       Requirements:
       - Use standard SVG syntax.
       - Ensure it is scalable (viewBox).
@@ -174,18 +210,18 @@ export const generateInitialSVG = async (plan: string): Promise<string> => {
       - For animations, only animate SVG-safe properties (transform, opacity, fill, stroke).
       - Return ONLY the SVG code.`,
       config: {
-        thinkingConfig: { thinkingBudget: 2048 }
-      }
-    });
-    return cleanSVGCode(response.text || "");
+        thinkingConfig: { includeThoughts: true },
+      },
+    }, onThought);
+    return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   });
 };
 
-export const evaluateSVG = async (imageBase64: string, originalPrompt: string, iteration: number): Promise<string> => {
+export const evaluateSVG = async (imageBase64: string, originalPrompt: string, iteration: number, onThought?: ThoughtCallback): Promise<GeminiResult> => {
   return retryOperation(async () => {
     const base64Data = imageBase64.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
 
-    const response = await getAI().models.generateContent({
+    return streamWithThoughts({
       model: MODEL_VISION,
       contents: {
         parts: [
@@ -196,45 +232,44 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
                 }
             },
             {
-                text: `You are a strict Senior Design Critic. 
+                text: `You are a strict Senior Design Critic.
                 Analyze this rendered SVG (Iteration #${iteration}).
                 The original goal was: "${originalPrompt}".
-                
+
                 Critique the image based on:
                 1. Alignment with the prompt.
                 2. Visual aesthetics (balance, color, contrast).
                 3. Technical execution (if visible artifacts exist).
                 4. Animation quality (if present): smoothness, realism, and whether the motion enhances or distracts from the design.
-                
+
                 Be harsh but constructive. Point out exactly what looks wrong, amateurish, or broken.
                 Limit your critique to 3-4 concise, actionable bullet points.`
             }
         ]
       },
       config: {
-         thinkingConfig: { thinkingBudget: 1024 }
-      }
-    });
-    return response.text || "No critique generated.";
+        thinkingConfig: { includeThoughts: true },
+      },
+    }, onThought);
   });
 };
 
-export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string): Promise<string> => {
+export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
   return retryOperation(async () => {
-    const response = await getAI().models.generateContent({
+    const result = await streamWithThoughts({
       model: MODEL_REASONING,
       contents: `You are an expert SVG Coder.
-      
+
       Original Goal: "${originalPrompt}"
-      
+
       Current SVG Code:
       \`\`\`xml
       ${currentSvgCode}
       \`\`\`
-      
+
       Critique to address:
       ${critique}
-      
+
       Task:
       Rewrite the SVG code to fix the issues mentioned in the critique and improve the overall quality.
       - Keep the code clean and efficient.
@@ -243,9 +278,9 @@ export const refineSVG = async (currentSvgCode: string, critique: string, origin
       - Do not use external CSS files or JavaScript.
       - Return ONLY the new SVG code.`,
       config: {
-        thinkingConfig: { thinkingBudget: 4096 }
-      }
-    });
-    return cleanSVGCode(response.text || "");
+        thinkingConfig: { includeThoughts: true },
+      },
+    }, onThought);
+    return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   });
 };

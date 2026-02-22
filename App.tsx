@@ -20,6 +20,7 @@ const App: React.FC = () => {
     phase: AppPhase.IDLE,
     currentIteration: 0,
     lastCritique: null,
+    lastThoughts: null,
     plan: null,
     error: null,
   });
@@ -146,37 +147,41 @@ const App: React.FC = () => {
   const runRefinementLoop = async () => {
       if (!isLoopingRef.current) return;
 
+      const handleThought = (thoughts: string) => {
+        setState(prev => ({ ...prev, lastThoughts: thoughts }));
+      };
+
       try {
           // --- INITIALIZATION PHASE ---
           // Use refs to check state to avoid stale closure issues
           if (!latestSVGRef.current) {
-              updatePhase(AppPhase.PLANNING, { error: null });
-              const plan = await gemini.planSVG(promptRef.current);
-              
+              updatePhase(AppPhase.PLANNING, { error: null, lastThoughts: null });
+              const planResult = await gemini.planSVG(promptRef.current, handleThought);
+
               if(!isLoopingRef.current) return;
-              updatePhase(AppPhase.GENERATING);
-              const svg = await gemini.generateInitialSVG(plan);
-              
-              latestSVGRef.current = svg;
-              setCurrentSVG(svg);
+              updatePhase(AppPhase.GENERATING, { lastThoughts: null });
+              const svgResult = await gemini.generateInitialSVG(planResult.text, handleThought);
+
+              latestSVGRef.current = svgResult.text;
+              setCurrentSVG(svgResult.text);
               // Generate the ID for the first iteration (Iteration 1)
-              currentVersionIdRef.current = uuidv4(); 
-              
+              currentVersionIdRef.current = uuidv4();
+
               iterationRef.current = 1;
-              setState(prev => ({...prev, currentIteration: 1, plan }));
-              
+              setState(prev => ({...prev, currentIteration: 1, plan: planResult.text }));
+
               setTimeout(runRefinementLoop, 1500);
               return;
           }
 
           // --- REFINEMENT LOOP ---
-          
+
           // 1. RENDER
-          updatePhase(AppPhase.RENDERING, { error: null });
+          updatePhase(AppPhase.RENDERING, { error: null, lastThoughts: null });
           // Short delay to ensure DOM is ready before capture
-          await new Promise(r => setTimeout(r, 200)); 
+          await new Promise(r => setTimeout(r, 200));
           const imageBase64 = await canvasRef.current?.captureImage();
-          
+
           if (!imageBase64) {
               console.warn("Capture failed, retrying...");
               setTimeout(runRefinementLoop, 1000);
@@ -187,35 +192,35 @@ const App: React.FC = () => {
           await saveToHistory(
               currentVersionIdRef.current,
               latestSVGRef.current,
-              undefined, 
+              undefined,
               iterationRef.current,
               imageBase64
           );
 
           // 2. EVALUATE
           if(!isLoopingRef.current) return;
-          updatePhase(AppPhase.EVALUATING);
-          const critique = await gemini.evaluateSVG(imageBase64, promptRef.current, iterationRef.current);
-          
-          setState(prev => ({...prev, lastCritique: critique}));
+          updatePhase(AppPhase.EVALUATING, { lastThoughts: null });
+          const critiqueResult = await gemini.evaluateSVG(imageBase64, promptRef.current, iterationRef.current, handleThought);
+
+          setState(prev => ({...prev, lastCritique: critiqueResult.text}));
 
           // 2b. SAVE (UPDATE) - Update gallery item with critique
           await saveToHistory(
               currentVersionIdRef.current,
               latestSVGRef.current,
-              critique,
+              critiqueResult.text,
               iterationRef.current,
               imageBase64
           );
 
           // 3. REFINE
           if(!isLoopingRef.current) return;
-          updatePhase(AppPhase.REFINING);
-          const refinedCode = await gemini.refineSVG(latestSVGRef.current, critique, promptRef.current);
-          
-          latestSVGRef.current = refinedCode;
-          setCurrentSVG(refinedCode);
-          
+          updatePhase(AppPhase.REFINING, { lastThoughts: null });
+          const refineResult = await gemini.refineSVG(latestSVGRef.current, critiqueResult.text, promptRef.current, handleThought);
+
+          latestSVGRef.current = refineResult.text;
+          setCurrentSVG(refineResult.text);
+
           // Prepare for NEXT iteration
           currentVersionIdRef.current = uuidv4();
           iterationRef.current += 1;
@@ -269,6 +274,7 @@ const App: React.FC = () => {
         phase: AppPhase.PLANNING,
         currentIteration: 0,
         lastCritique: null,
+        lastThoughts: null,
         plan: null,
         error: null
     });
@@ -284,7 +290,11 @@ const App: React.FC = () => {
   const handleOpenApiKeyModal = () => {
     setIsApiKeyModalOpen(true);
   };
-  
+
+  const isThinking = state.phase !== AppPhase.IDLE &&
+                     state.phase !== AppPhase.STOPPED &&
+                     state.phase !== AppPhase.RENDERING;
+
   return (
     <div className="min-h-screen p-4 md:p-10 overflow-x-hidden relative">
       <SketchSvgFilters />
@@ -305,7 +315,7 @@ const App: React.FC = () => {
       <div className="max-w-[1200px] mx-auto relative z-10">
         <Header onOpenApiKeyModal={handleOpenApiKeyModal} />
         
-        <ActiveStage 
+        <ActiveStage
             phase={state.phase}
             prompt={prompt}
             setPrompt={setPrompt}
@@ -314,6 +324,8 @@ const App: React.FC = () => {
             svgCode={currentSVG}
             canvasRef={canvasRef}
             critique={state.lastCritique}
+            thoughts={state.lastThoughts}
+            isThinking={isThinking}
             plan={state.plan}
             iteration={state.currentIteration}
         />

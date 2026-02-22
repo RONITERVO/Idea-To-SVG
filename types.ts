@@ -22,6 +22,7 @@ export interface GenerationState {
   phase: AppPhase;
   currentIteration: number;
   lastCritique: string | null;
+  lastThoughts: string | null;
   plan: string | null;
   error: string | null;
 }
