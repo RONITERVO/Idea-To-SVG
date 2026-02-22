@@ -15,12 +15,12 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved }
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setError(null);
     setIsSubmitting(true);
 
     try {
-      setApiKey(keyInput);
+      await setApiKey(keyInput);
       setKeyInput('');
       onKeySaved();
       onClose();
@@ -130,7 +130,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved }
         </div>
 
         <p className="font-hand text-xs text-muted-foreground mt-4 text-center">
-          🔒 Your API key is stored locally in your browser and never sent to our servers.
+          Your API key is stored securely on your device and never sent to our servers.
         </p>
       </div>
     </div>

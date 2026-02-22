@@ -40,3 +40,7 @@ android/.gradle/
 backend/functions/node_modules/
 backend/functions/lib/
 backend/functions/.env
+backend/functions/service-account.json
+
+# Firebase / Google services config (contains project secrets)
+android/app/google-services.json

@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AppPhase, GenerationState, SVGVersion } from './types';
 import * as db from './services/db';
 import * as gemini from './services/gemini';
-import { loadApiKey, ApiKeyError } from './services/apiKeyStorage';
+import { loadApiKey, initApiKey, ApiKeyError } from './services/apiKeyStorage';
 import { useTokenMode as checkTokenMode } from './services/platform';
 import { onAuthStateChanged, getCurrentUser } from './services/auth';
 import { refreshBalance, getLocalBalance, subscribeToBalance } from './services/tokenManager';
@@ -66,39 +66,40 @@ const App: React.FC = () => {
   const phaseRef = useRef<AppPhase>(AppPhase.IDLE);
 
   useEffect(() => {
-    const loadHistory = async () => {
+    const initialize = async () => {
       try {
         const saved = await db.getAllVersions();
         setVersions(saved);
       } catch (e) {
         console.error("Failed to load history", e);
       }
+
+      // Initialize API key from SecureStorage (async on native)
+      await initApiKey();
+
+      // Now loadApiKey() returns the cached key
+      const apiKey = loadApiKey();
+      setHasApiKey(!!apiKey);
+      const tokenMode = checkTokenMode();
+      setIsTokenMode(tokenMode);
+
+      if (!apiKey && !tokenMode) {
+        setIsApiKeyModalOpen(true);
+      } else if (!apiKey && tokenMode) {
+        setShowWelcome(true);
+      }
     };
-    loadHistory();
 
-    // Determine mode
-    const apiKey = loadApiKey();
-    setHasApiKey(!!apiKey);
-    const tokenMode = checkTokenMode();
-    setIsTokenMode(tokenMode);
+    initialize();
 
-    if (!apiKey && !tokenMode) {
-      // Web user without key → show API key modal (existing behavior)
-      setIsApiKeyModalOpen(true);
-    } else if (!apiKey && tokenMode) {
-      // Android user without key → show welcome screen
-      setShowWelcome(true);
-    }
-
-    // Listen for auth state
+    // Auth & balance listeners (synchronous setup, independent of init)
     const unsubAuth = onAuthStateChanged((user) => {
       setIsAuthenticated(!!user);
-      if (user && tokenMode) {
+      if (user && checkTokenMode()) {
         refreshBalance().then(setTokenBalance).catch(console.error);
       }
     });
 
-    // Listen for balance changes
     const unsubBalance = subscribeToBalance(setTokenBalance);
 
     return () => {

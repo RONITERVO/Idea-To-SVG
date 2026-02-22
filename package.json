@@ -14,9 +14,11 @@
     "build:aab": "npm run build:android && npx cap sync android && cd android && gradlew bundleRelease"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@capacitor/android": "^8.1.0",
     "@capacitor/cli": "^8.1.0",
     "@capacitor/core": "^8.1.0",
+    "@capacitor/preferences": "^8.0.1",
     "@google/genai": "^1.41.0",
     "firebase": "^12.9.0",
     "lucide-react": "^0.564.0",
