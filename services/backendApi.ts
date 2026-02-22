@@ -24,6 +24,10 @@ export interface PurchaseVerifyResult {
   tokensGranted?: number;
 }
 
+export interface DeleteAccountResult {
+  deleted: boolean;
+}
+
 export const estimateTokenCost = async (
   action: string,
   params: {
@@ -68,4 +72,10 @@ export const verifyPurchase = async (
   const fn = httpsCallable<any, PurchaseVerifyResult>(functions, "verifyAndCreditPurchase");
   const result = await fn({ purchaseToken, productId });
   return result.data;
+};
+
+export const deleteMyAccount = async (): Promise<boolean> => {
+  const fn = httpsCallable<any, DeleteAccountResult>(functions, "deleteMyAccount");
+  const result = await fn({});
+  return !!result.data.deleted;
 };

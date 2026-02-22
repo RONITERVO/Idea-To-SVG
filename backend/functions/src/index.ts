@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { GoogleGenAI } from "@google/genai";
 import { google } from "googleapis";
+import { createHash } from "node:crypto";
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -30,11 +31,50 @@ const OUTPUT_ESTIMATES: Record<string, number> = {
 };
 
 const MODEL = "gemini-2.5-flash";
+const ENFORCE_APP_CHECK = process.env.ENFORCE_APP_CHECK === "true";
+
+const purchaseDocIdFromToken = (purchaseToken: string): string => {
+  return createHash("sha256").update(purchaseToken).digest("hex");
+};
+
+const isAlreadyExistsError = (error: unknown): boolean => {
+  const code = (error as { code?: unknown })?.code;
+  const message = ((error as { message?: string })?.message || "").toLowerCase();
+  return code === 6 || code === "already-exists" || message.includes("already exists");
+};
+
+const isAlreadyConsumedError = (error: unknown): boolean => {
+  const message = ((error as { message?: string })?.message || "").toLowerCase();
+  return message.includes("already consumed") || message.includes("consumption state");
+};
+
+const getUserBalance = async (uid: string): Promise<number> => {
+  const doc = await db.collection("users").doc(uid).get();
+  return doc.exists ? (doc.data()?.balance || 0) : 0;
+};
+
+const consumePurchase = async (
+  androidPublisher: any,
+  productId: string,
+  purchaseToken: string
+): Promise<void> => {
+  try {
+    await androidPublisher.purchases.products.consume({
+      packageName: "com.ronitervo.ideatesvg",
+      productId,
+      token: purchaseToken,
+    });
+  } catch (consumeError) {
+    if (!isAlreadyConsumedError(consumeError)) {
+      throw consumeError;
+    }
+  }
+};
 
 // ===== BILLING =====
 
 export const verifyAndCreditPurchase = onCall(
-  { enforceAppCheck: false },
+  { enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in");
@@ -51,16 +91,96 @@ export const verifyAndCreditPurchase = onCall(
       throw new HttpsError("invalid-argument", `Unknown product: ${productId}`);
     }
 
-    // Idempotency check: has this purchase already been credited?
-    const existingPurchase = await db
-      .collection("purchases")
-      .where("purchaseToken", "==", purchaseToken)
-      .limit(1)
-      .get();
+    const purchaseDocId = purchaseDocIdFromToken(purchaseToken);
+    const purchaseRef = db.collection("purchases").doc(purchaseDocId);
 
-    if (!existingPurchase.empty) {
-      const existing = existingPurchase.docs[0].data();
-      return { alreadyCredited: true, balance: existing.balanceAfter };
+    // Lock by purchase token hash to prevent duplicate crediting in concurrent requests.
+    try {
+      await purchaseRef.create({
+        uid,
+        productId,
+        purchaseTokenHash: purchaseDocId,
+        status: "processing",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) {
+        console.error("Failed to create purchase lock:", error);
+        throw new HttpsError("internal", "Could not process purchase");
+      }
+
+      const existingSnap = await purchaseRef.get();
+      const existing = existingSnap.data();
+
+      if (!existingSnap.exists || !existing) {
+        throw new HttpsError("aborted", "Purchase is already being processed. Please retry.");
+      }
+
+      if (existing.uid && existing.uid !== uid) {
+        throw new HttpsError("permission-denied", "Purchase token belongs to a different user");
+      }
+
+      if (existing.status === "completed") {
+        const safeBalance = typeof existing.balanceAfter === "number"
+          ? existing.balanceAfter
+          : await getUserBalance(uid);
+
+        // Best-effort recovery for previously credited purchases where consume failed.
+        if (existing.consumePending === true) {
+          try {
+            const auth = new google.auth.GoogleAuth({
+              scopes: ["https://www.googleapis.com/auth/androidpublisher"],
+            });
+            const androidPublisher = google.androidpublisher({ version: "v3", auth });
+            await consumePurchase(androidPublisher, productId, purchaseToken);
+            await purchaseRef.set(
+              {
+                consumePending: false,
+                consumeError: admin.firestore.FieldValue.delete(),
+                consumedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch (consumeRetryError: any) {
+            console.error("Failed to recover pending consume:", consumeRetryError);
+          }
+        }
+
+        return { alreadyCredited: true, balance: safeBalance };
+      }
+
+      if (existing.status === "failed") {
+        await purchaseRef.set(
+          {
+            status: "processing",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        const updatedAtMs =
+          typeof existing.updatedAt?.toMillis === "function"
+            ? existing.updatedAt.toMillis()
+            : typeof existing.createdAt?.toMillis === "function"
+              ? existing.createdAt.toMillis()
+              : 0;
+        const isStaleProcessing = updatedAtMs > 0 && Date.now() - updatedAtMs > 5 * 60 * 1000;
+
+        if (!isStaleProcessing) {
+          throw new HttpsError("aborted", "Purchase is currently being processed. Please try again.");
+        }
+
+        await purchaseRef.set(
+          {
+            status: "processing",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
     }
 
     // Verify purchase with Google Play Developer API
@@ -78,6 +198,36 @@ export const verifyAndCreditPurchase = onCall(
 
       if (verification.data.purchaseState !== 0) {
         throw new HttpsError("failed-precondition", "Purchase not completed");
+      }
+
+      // If obfuscated account ID was set in BillingFlow, ensure token belongs to this uid.
+      if (
+        verification.data.obfuscatedExternalAccountId &&
+        verification.data.obfuscatedExternalAccountId !== uid
+      ) {
+        throw new HttpsError("permission-denied", "Purchase token does not match signed-in user");
+      }
+
+      if (verification.data.consumptionState === 1) {
+        // Already consumed before reaching this backend (or replayed token).
+        // Mark as completed-without-credit to prevent duplicate grants.
+        const currentBalance = await getUserBalance(uid);
+        await purchaseRef.set(
+          {
+            uid,
+            productId,
+            purchaseTokenHash: purchaseDocId,
+            orderId: verification.data.orderId || null,
+            balanceAfter: currentBalance,
+            status: "completed",
+            tokensGranted: 0,
+            consumedBeforeVerification: true,
+            verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        return { alreadyCredited: true, balance: currentBalance };
       }
 
       // Credit tokens
@@ -101,28 +251,65 @@ export const verifyAndCreditPurchase = onCall(
         return newBal;
       });
 
-      // Record purchase
-      await db.collection("purchases").add({
-        uid,
-        productId,
-        purchaseToken,
-        tokensGranted: tokensToGrant,
-        orderId: verification.data.orderId || null,
-        balanceAfter: newBalance,
-        verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-        status: "completed",
-      });
+      // Persist completion immediately after credit to guarantee idempotency
+      // even if consume hits a transient failure.
+      await purchaseRef.set(
+        {
+          uid,
+          productId,
+          purchaseTokenHash: purchaseDocId,
+          tokensGranted: tokensToGrant,
+          orderId: verification.data.orderId || null,
+          balanceAfter: newBalance,
+          verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: "completed",
+          consumePending: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
 
-      // Acknowledge purchase (consume it so user can buy again)
-      await androidPublisher.purchases.products.acknowledge({
-        packageName: "com.ronitervo.ideatesvg",
-        productId: productId,
-        token: purchaseToken,
-      });
+      try {
+        await consumePurchase(androidPublisher, productId, purchaseToken);
+        await purchaseRef.set(
+          {
+            consumePending: false,
+            consumeError: admin.firestore.FieldValue.delete(),
+            consumedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (consumeError: any) {
+        console.error("Purchase consumed failed after credit:", consumeError);
+        await purchaseRef.set(
+          {
+            consumePending: true,
+            consumeError: consumeError?.message || "consume_failed",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
 
       return { alreadyCredited: false, balance: newBalance, tokensGranted: tokensToGrant };
     } catch (error: any) {
-      if (error instanceof HttpsError) throw error;
+      const safeMessage = error instanceof HttpsError ? error.message : (error?.message || "verification_failed");
+      await purchaseRef.set(
+        {
+          status: "failed",
+          lastError: safeMessage,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ).catch((writeError) => {
+        console.error("Failed to persist purchase failure state:", writeError);
+      });
+
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+
       console.error("Purchase verification failed:", error);
       throw new HttpsError("internal", "Failed to verify purchase");
     }
@@ -132,7 +319,7 @@ export const verifyAndCreditPurchase = onCall(
 // ===== TOKEN ESTIMATION =====
 
 export const estimateTokenCost = onCall(
-  { enforceAppCheck: false },
+  { enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in");
@@ -166,7 +353,7 @@ export const estimateTokenCost = onCall(
 // ===== GET BALANCE =====
 
 export const getBalance = onCall(
-  { enforceAppCheck: false },
+  { enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in");
@@ -191,7 +378,7 @@ export const getBalance = onCall(
 // ===== GENERATE WITH TOKENS =====
 
 export const generateWithTokens = onCall(
-  { enforceAppCheck: false, timeoutSeconds: 300 },
+  { enforceAppCheck: ENFORCE_APP_CHECK, timeoutSeconds: 300 },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Must be signed in");
@@ -246,8 +433,22 @@ export const generateWithTokens = onCall(
     const newBalance = await db.runTransaction(async (tx) => {
       const doc = await tx.get(userRef);
       const currentBalance = doc.exists ? (doc.data()?.balance || 0) : 0;
-      const newBal = Math.max(0, currentBalance - totalUsed);
-      tx.update(userRef, { balance: newBal, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      if (currentBalance < totalUsed) {
+        throw new HttpsError(
+          "resource-exhausted",
+          `Insufficient tokens after generation. Balance: ${currentBalance}, required: ${totalUsed}`
+        );
+      }
+      const newBal = currentBalance - totalUsed;
+      tx.set(
+        userRef,
+        {
+          balance: newBal,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...(doc.exists ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+        },
+        { merge: true }
+      );
       return newBal;
     });
 
@@ -355,3 +556,39 @@ function buildPromptForAction(
       throw new HttpsError("invalid-argument", `Unknown action: ${action}`);
   }
 }
+
+// ===== ACCOUNT DELETION =====
+
+export const deleteMyAccount = onCall(
+  { enforceAppCheck: ENFORCE_APP_CHECK, timeoutSeconds: 300 },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Must be signed in");
+    }
+
+    const uid = request.auth.uid;
+
+    // Delete user-owned purchase records in batches.
+    while (true) {
+      const purchasesSnap = await db
+        .collection("purchases")
+        .where("uid", "==", uid)
+        .limit(200)
+        .get();
+
+      if (purchasesSnap.empty) break;
+
+      const batch = db.batch();
+      purchasesSnap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
+
+    // Delete token balance/profile doc.
+    await db.collection("users").doc(uid).delete().catch(() => {});
+
+    // Delete Firebase Auth account.
+    await admin.auth().deleteUser(uid);
+
+    return { deleted: true };
+  }
+);

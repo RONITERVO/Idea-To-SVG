@@ -18,7 +18,7 @@ export interface PurchaseResult {
 
 interface BillingPluginInterface {
   queryProducts(options: { productIds: string[] }): Promise<{ products: Product[] }>;
-  purchaseProduct(options: { productId: string }): Promise<PurchaseResult>;
+  purchaseProduct(options: { productId: string; obfuscatedAccountId?: string }): Promise<PurchaseResult>;
   getPendingPurchases(): Promise<{ purchases: PurchaseResult[] }>;
 }
 
@@ -63,11 +63,17 @@ export const queryProducts = async (): Promise<Product[]> => {
   }
 };
 
-export const purchaseProduct = async (productId: string): Promise<PurchaseResult> => {
+export const purchaseProduct = async (
+  productId: string,
+  obfuscatedAccountId?: string
+): Promise<PurchaseResult> => {
   if (!isAndroid()) {
     throw new Error('In-app purchases are only available on Android');
   }
-  return BillingPlugin.purchaseProduct({ productId });
+  return BillingPlugin.purchaseProduct({
+    productId,
+    ...(obfuscatedAccountId ? { obfuscatedAccountId } : {}),
+  });
 };
 
 export const getPendingPurchases = async (): Promise<PurchaseResult[]> => {

@@ -131,6 +131,7 @@ class BillingPlugin : Plugin() {
             call.reject("productId is required")
             return
         }
+        val obfuscatedAccountId = call.getString("obfuscatedAccountId")
 
         ensureConnected {
             // First query the product details
@@ -152,7 +153,7 @@ class BillingPlugin : Plugin() {
                 }
 
                 val productDetails = productDetailsList[0]
-                val flowParams = BillingFlowParams.newBuilder()
+                val flowBuilder = BillingFlowParams.newBuilder()
                     .setProductDetailsParamsList(
                         listOf(
                             BillingFlowParams.ProductDetailsParams.newBuilder()
@@ -160,7 +161,12 @@ class BillingPlugin : Plugin() {
                                 .build()
                         )
                     )
-                    .build()
+
+                if (!obfuscatedAccountId.isNullOrBlank()) {
+                    flowBuilder.setObfuscatedAccountId(obfuscatedAccountId)
+                }
+
+                val flowParams = flowBuilder.build()
 
                 pendingPurchaseCall = call
                 val activity = this@BillingPlugin.activity

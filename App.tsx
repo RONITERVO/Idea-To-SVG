@@ -5,8 +5,17 @@ import * as db from './services/db';
 import * as gemini from './services/gemini';
 import { loadApiKey, initApiKey, ApiKeyError } from './services/apiKeyStorage';
 import { useTokenMode as checkTokenMode } from './services/platform';
-import { onAuthStateChanged, getCurrentUser } from './services/auth';
-import { refreshBalance, getLocalBalance, subscribeToBalance } from './services/tokenManager';
+import {
+  onAuthStateChanged,
+  getCurrentUser,
+  signOut,
+  completePendingRedirectSignIn,
+} from './services/auth';
+import { refreshBalance, subscribeToBalance } from './services/tokenManager';
+import { getPendingPurchases } from './services/billing';
+import { verifyPurchase, deleteMyAccount } from './services/backendApi';
+import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './services/appConfig';
+import { sanitizeSvg } from './services/svgSanitizer';
 import { SVGCanvasHandle } from './components/SVGCanvas';
 import type { TokenEstimateResult } from './services/gemini';
 
@@ -20,6 +29,7 @@ import ApiKeyModal from './components/ApiKeyModal';
 import TokenEstimate from './components/TokenEstimate';
 import TokenPurchase from './components/TokenPurchase';
 import WelcomeScreen from './components/WelcomeScreen';
+import AccountModal from './components/AccountModal';
 
 const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
@@ -46,12 +56,13 @@ const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [showWelcome, setShowWelcome] = useState<boolean>(false);
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
 
   // Token Estimation State
   const [tokenEstimate, setTokenEstimate] = useState<TokenEstimateResult | null>(null);
   const [isEstimating, setIsEstimating] = useState<boolean>(false);
   const [showEstimate, setShowEstimate] = useState<boolean>(false);
-  const [pendingStart, setPendingStart] = useState<boolean>(false);
 
   // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -64,6 +75,29 @@ const App: React.FC = () => {
   const currentVersionIdRef = useRef<string>('');
   const iterationRef = useRef(0);
   const phaseRef = useRef<AppPhase>(AppPhase.IDLE);
+  const pendingRecoveryForUidRef = useRef<string | null>(null);
+
+  const reconcilePendingPurchases = useCallback(async (uid: string) => {
+    if (pendingRecoveryForUidRef.current === uid) return;
+    pendingRecoveryForUidRef.current = uid;
+
+    try {
+      const pending = await getPendingPurchases();
+      if (pending.length === 0) return;
+
+      for (const purchase of pending) {
+        try {
+          await verifyPurchase(purchase.purchaseToken, purchase.productId);
+        } catch (error) {
+          console.error('Pending purchase reconciliation failed for one item:', error);
+        }
+      }
+
+      await refreshBalance().then(setTokenBalance);
+    } catch (error) {
+      console.error('Failed to reconcile pending purchases:', error);
+    }
+  }, []);
 
   useEffect(() => {
     const initialize = async () => {
@@ -74,6 +108,12 @@ const App: React.FC = () => {
         console.error("Failed to load history", e);
       }
 
+      // Completes Google redirect sign-in flows on Android/web if one is pending.
+      const redirectUser = await completePendingRedirectSignIn().catch((e) => {
+        console.error('Redirect sign-in completion failed:', e);
+        return null;
+      });
+
       // Initialize API key from SecureStorage (async on native)
       await initApiKey();
 
@@ -82,11 +122,12 @@ const App: React.FC = () => {
       setHasApiKey(!!apiKey);
       const tokenMode = checkTokenMode();
       setIsTokenMode(tokenMode);
+      const currentUser = redirectUser || getCurrentUser();
 
       if (!apiKey && !tokenMode) {
         setIsApiKeyModalOpen(true);
       } else if (!apiKey && tokenMode) {
-        setShowWelcome(true);
+        setShowWelcome(!currentUser);
       }
     };
 
@@ -96,7 +137,14 @@ const App: React.FC = () => {
     const unsubAuth = onAuthStateChanged((user) => {
       setIsAuthenticated(!!user);
       if (user && checkTokenMode()) {
+        setShowWelcome(false);
         refreshBalance().then(setTokenBalance).catch(console.error);
+        reconcilePendingPurchases(user.uid).catch(console.error);
+      } else if (!user) {
+        pendingRecoveryForUidRef.current = null;
+        if (checkTokenMode() && !loadApiKey()) {
+          setShowWelcome(true);
+        }
       }
     });
 
@@ -106,7 +154,7 @@ const App: React.FC = () => {
       unsubAuth();
       unsubBalance();
     };
-  }, []);
+  }, [reconcilePendingPurchases]);
 
   // Sync viewingVersion with versions list (allows live updates in modal)
   useEffect(() => {
@@ -130,10 +178,11 @@ const App: React.FC = () => {
   }, []);
 
   const saveToHistory = async (id: string, svgCode: string, critique: string | undefined, iteration: number, thumbnail: string) => {
+      const safeSvgCode = sanitizeSvg(svgCode);
       const newVersion: SVGVersion = {
           id: id,
           timestamp: Date.now(),
-          svgCode,
+          svgCode: safeSvgCode,
           critique,
           iteration,
           prompt: promptRef.current,
@@ -155,10 +204,11 @@ const App: React.FC = () => {
   };
 
   const handleManualAdd = async (code: string) => {
+    const safeCode = sanitizeSvg(code);
     const newVersion: SVGVersion = {
         id: uuidv4(),
         timestamp: Date.now(),
-        svgCode: code,
+        svgCode: safeCode,
         critique: "Manually added via input.",
         iteration: versions.length + 1,
         prompt: "Manual Entry",
@@ -211,9 +261,10 @@ const App: React.FC = () => {
               if(!isLoopingRef.current) return;
               updatePhase(AppPhase.GENERATING, { lastThoughts: [] });
               const svgResult = await gemini.generateInitialSVG(planResult.text, handleThought);
+              const safeInitialSvg = sanitizeSvg(svgResult.text);
 
-              latestSVGRef.current = svgResult.text;
-              setCurrentSVG(svgResult.text);
+              latestSVGRef.current = safeInitialSvg;
+              setCurrentSVG(safeInitialSvg);
               // Generate the ID for the first iteration (Iteration 1)
               currentVersionIdRef.current = uuidv4();
 
@@ -267,9 +318,10 @@ const App: React.FC = () => {
           if(!isLoopingRef.current) return;
           updatePhase(AppPhase.REFINING, { lastThoughts: [] });
           const refineResult = await gemini.refineSVG(latestSVGRef.current, critiqueResult.text, promptRef.current, handleThought);
+          const safeRefinedSvg = sanitizeSvg(refineResult.text);
 
-          latestSVGRef.current = refineResult.text;
-          setCurrentSVG(refineResult.text);
+          latestSVGRef.current = safeRefinedSvg;
+          setCurrentSVG(safeRefinedSvg);
 
           // Prepare for NEXT iteration
           currentVersionIdRef.current = uuidv4();
@@ -324,7 +376,6 @@ const App: React.FC = () => {
     }
 
     // Show token estimate before starting
-    setPendingStart(true);
     setShowEstimate(true);
     setIsEstimating(true);
     setTokenEstimate(null);
@@ -350,7 +401,6 @@ const App: React.FC = () => {
     if (!trimmed) return;
 
     setShowEstimate(false);
-    setPendingStart(false);
     setTokenEstimate(null);
 
     setPrompt(trimmed);
@@ -378,7 +428,6 @@ const App: React.FC = () => {
 
   const cancelEstimate = () => {
     setShowEstimate(false);
-    setPendingStart(false);
     setTokenEstimate(null);
     setIsEstimating(false);
   };
@@ -391,6 +440,41 @@ const App: React.FC = () => {
 
   const handleOpenApiKeyModal = () => {
     setIsApiKeyModalOpen(true);
+  };
+
+  const handleOpenAccountModal = () => {
+    setIsAccountModalOpen(true);
+  };
+
+  const handleSignOut = async () => {
+    stopLoop();
+    await signOut();
+    pendingRecoveryForUidRef.current = null;
+    setTokenBalance(0);
+    setIsAuthenticated(false);
+
+    if (checkTokenMode() && !loadApiKey()) {
+      setShowWelcome(true);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeletingAccount(true);
+    stopLoop();
+
+    try {
+      await deleteMyAccount();
+      await signOut().catch(() => {});
+      await db.clearHistory().catch(() => {});
+      pendingRecoveryForUidRef.current = null;
+      setTokenBalance(0);
+      setVersions([]);
+      setViewingVersion(null);
+      setIsAuthenticated(false);
+      setShowWelcome(true);
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   const handleWelcomeComplete = (mode: 'tokens' | 'apikey') => {
@@ -440,6 +524,8 @@ const App: React.FC = () => {
           onOpenApiKeyModal={handleOpenApiKeyModal}
           isTokenMode={isTokenMode && !hasApiKey}
           onOpenPurchaseModal={() => setIsPurchaseModalOpen(true)}
+          canManageAccount={isTokenMode && !hasApiKey && isAuthenticated}
+          onOpenAccountModal={handleOpenAccountModal}
         />
 
         <ActiveStage
@@ -481,6 +567,26 @@ const App: React.FC = () => {
           <p className="font-hand text-sm text-muted-foreground/40">
             ~ made with pencil shavings & pixels ~
           </p>
+          <div className="mt-2 space-x-3">
+            {PRIVACY_POLICY_URL && (
+              <a
+                href={PRIVACY_POLICY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-hand text-xs text-accent underline hover:text-accent/80"
+              >
+                Privacy policy
+              </a>
+            )}
+            {SUPPORT_EMAIL && (
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="font-hand text-xs text-muted-foreground hover:text-foreground"
+              >
+                {SUPPORT_EMAIL}
+              </a>
+            )}
+          </div>
         </footer>
       </div>
 
@@ -514,6 +620,17 @@ const App: React.FC = () => {
         isOpen={isPurchaseModalOpen}
         onClose={() => setIsPurchaseModalOpen(false)}
         onPurchaseComplete={handlePurchaseComplete}
+      />
+
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        isAuthenticated={isAuthenticated}
+        isDeleting={isDeletingAccount}
+        privacyPolicyUrl={PRIVACY_POLICY_URL}
+        supportEmail={SUPPORT_EMAIL}
+        onClose={() => setIsAccountModalOpen(false)}
+        onSignOut={handleSignOut}
+        onDeleteAccount={handleDeleteAccount}
       />
     </div>
   );

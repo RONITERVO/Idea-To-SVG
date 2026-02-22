@@ -1,6 +1,7 @@
 import React from 'react';
 import { SVGVersion } from '../types';
 import { X, Copy, Download, MessageSquare } from 'lucide-react';
+import { sanitizeSvg } from '../services/svgSanitizer';
 
 interface ModalProps {
   version: SVGVersion | null;
@@ -48,7 +49,7 @@ const Modal: React.FC<ModalProps> = ({ version, onClose }) => {
                  
                  <div 
                     className="w-full h-full relative z-10 flex items-center justify-center p-4 [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:drop-shadow-lg" 
-                    dangerouslySetInnerHTML={{ __html: version.svgCode }} 
+                    dangerouslySetInnerHTML={{ __html: sanitizeSvg(version.svgCode) }} 
                  />
             </div>
 

@@ -4,6 +4,7 @@ import { queryProducts, purchaseProduct, TOKEN_AMOUNTS, type Product } from '../
 import { verifyPurchase } from '../services/backendApi';
 import { refreshBalance, formatTokens } from '../services/tokenManager';
 import { isAndroid } from '../services/platform';
+import { getCurrentUser } from '../services/auth';
 
 interface TokenPurchaseProps {
   isOpen: boolean;
@@ -48,8 +49,13 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
     setSuccess(null);
 
     try {
+      const user = getCurrentUser();
+      if (!user) {
+        throw new Error('Please sign in to purchase tokens.');
+      }
+
       // Launch native purchase flow
-      const result = await purchaseProduct(productId);
+      const result = await purchaseProduct(productId, user.uid);
 
       // Verify purchase with backend
       const verification = await verifyPurchase(result.purchaseToken, productId);
@@ -58,7 +64,12 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
       await refreshBalance();
 
       const tokenInfo = TOKEN_AMOUNTS[productId];
-      setSuccess(`Added ${formatTokens(tokenInfo.tokens)} tokens to your balance!`);
+      if (verification.alreadyCredited) {
+        setSuccess('This purchase was already credited to your account.');
+      } else {
+        const granted = verification.tokensGranted ?? tokenInfo.tokens;
+        setSuccess(`Added ${formatTokens(granted)} tokens to your balance!`);
+      }
 
       setTimeout(() => {
         onPurchaseComplete();

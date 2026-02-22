@@ -1,14 +1,22 @@
 import React from 'react';
-import { Key } from 'lucide-react';
+import { Key, UserCircle2 } from 'lucide-react';
 import TokenDisplay from './TokenDisplay';
 
 interface HeaderProps {
   onOpenApiKeyModal: () => void;
   isTokenMode: boolean;
   onOpenPurchaseModal: () => void;
+  canManageAccount: boolean;
+  onOpenAccountModal: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ onOpenApiKeyModal, isTokenMode, onOpenPurchaseModal }) => {
+const Header: React.FC<HeaderProps> = ({
+  onOpenApiKeyModal,
+  isTokenMode,
+  onOpenPurchaseModal,
+  canManageAccount,
+  onOpenAccountModal,
+}) => {
   return (
     <header className="mb-12 flex flex-col md:flex-row items-center justify-between gap-4 animate-sketch-in">
       <div className="flex items-center gap-3">
@@ -36,6 +44,17 @@ const Header: React.FC<HeaderProps> = ({ onOpenApiKeyModal, isTokenMode, onOpenP
       <div className="flex items-center gap-3">
         {isTokenMode && (
           <TokenDisplay onClick={onOpenPurchaseModal} />
+        )}
+
+        {canManageAccount && (
+          <button
+            onClick={onOpenAccountModal}
+            className="p-2 text-muted-foreground hover:text-foreground transition-colors hover:bg-muted/30 rounded-lg"
+            title="Manage Account"
+            aria-label="Manage Account"
+          >
+            <UserCircle2 size={20} />
+          </button>
         )}
 
         <button

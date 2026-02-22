@@ -70,11 +70,11 @@ This app is deployed on GitHub Pages and requires **no installation**!
 1. **Visit the App**: Navigate to the deployed GitHub Pages URL
 2. **Enter Your API Key**: On first visit, you'll be prompted to enter your Gemini API key
    - Get a free API key at [Google AI Studio](https://ai.google.dev/)
-   - Your key is stored **locally in your browser** and never sent to our servers
+   - Your key is stored **locally in your browser** and never sent to our backend
    - The key remains private and is only used for direct API calls to Google's Gemini service
 3. **Start Creating**: Once your key is set, you can start generating SVG graphics!
 
-> **🔒 Security Note**: Your API key is stored in browser localStorage and is never transmitted to any third-party servers. All API calls go directly from your browser to Google's Gemini API.
+> **🔒 Security Note**: In API-key mode, your key stays on-device and calls Gemini directly. In Android token mode, prompts/images are processed through Firebase Functions for token accounting and purchase verification.
 
 ### Deploying to GitHub Pages
 

@@ -1,4 +1,5 @@
-import React, { useRef, forwardRef, useImperativeHandle } from 'react';
+import React, { useRef, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { sanitizeSvg } from '../services/svgSanitizer';
 
 interface SVGCanvasProps {
   svgCode: string;
@@ -10,6 +11,7 @@ export interface SVGCanvasHandle {
 
 const SVGCanvas = forwardRef<SVGCanvasHandle, SVGCanvasProps>(({ svgCode }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const safeSvgCode = useMemo(() => sanitizeSvg(svgCode), [svgCode]);
 
   useImperativeHandle(ref, () => ({
     captureImage: async () => {
@@ -85,10 +87,10 @@ const SVGCanvas = forwardRef<SVGCanvasHandle, SVGCanvasProps>(({ svgCode }, ref)
              }} 
         />
         
-      {svgCode ? (
+      {safeSvgCode ? (
         <div 
             className="w-full h-full flex items-center justify-center p-8 z-10 [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:drop-shadow-sm"
-            dangerouslySetInnerHTML={{ __html: svgCode }} 
+            dangerouslySetInnerHTML={{ __html: safeSvgCode }} 
         />
       ) : (
         <div className="text-muted-foreground/30 flex flex-col items-center z-10">

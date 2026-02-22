@@ -290,7 +290,7 @@ For each product:
 
 ## 12. Set Up Play Developer API for Backend Verification
 
-The backend needs to verify purchases with Google Play. This requires a service account.
+The backend verifies purchases with Google Play using Google Cloud service-account credentials from the Firebase Functions runtime.
 
 ### Create a Service Account
 
@@ -300,32 +300,31 @@ The backend needs to verify purchases with Google Play. This requires a service 
 4. Click **Create Service Account**
 5. Name: `play-billing-verifier`
 6. Click **Create and Continue**
-7. Skip roles (we'll set this up in Play Console instead)
+7. Skip roles (we'll set this up in Play Console permissions)
 8. Click **Done**
-9. Click on the service account you just created
-10. Go to the **Keys** tab
-11. Click **Add Key** > **Create new key** > **JSON** > **Create**
-12. A `.json` file downloads — **keep this safe, do NOT share or commit it**
+9. Do **not** download a JSON key file for production unless absolutely necessary
 
 ### Link Service Account to Play Console
 
 1. Go to https://play.google.com/console
-2. Click **Settings** (the gear icon at bottom-left) > **API access**
+2. Click **Settings** (gear icon) > **API access**
 3. If prompted, click **Link** to link your Google Cloud project
 4. Under **Service accounts**, find your `play-billing-verifier` account
 5. Click **Manage Play Console permissions**
 6. Grant these permissions:
-   - **View app information and download bulk reports** (read-only)
+   - **View app information and download bulk reports**
    - **View financial data, orders, and cancellation survey responses**
    - **Manage orders and subscriptions**
 7. Under **App permissions**, add your Sketch AI app
 8. Click **Invite user** then **Send invite**
 
-### Upload Service Account Key to Firebase
+### Runtime Credential Model
 
-Copy the downloaded JSON key file into `backend/functions/` and rename it to `service-account.json`.
+No `service-account.json` file is required by this codebase for production.
 
-**Important**: Make sure `service-account.json` is in your `.gitignore` so it's never committed.
+- Cloud Functions uses Application Default Credentials (`google.auth.GoogleAuth`)
+- Keep credentials managed by Google Cloud/Firebase runtime
+- Avoid committing or distributing long-lived JSON keys
 
 ---
 
@@ -409,11 +408,22 @@ The server uses its own Gemini API key to make requests on behalf of token-payin
 
 ## 16. Set Firebase Environment Variables
 
-The backend functions need your Gemini API key. Set it as an environment variable.
+The backend functions need your Gemini API key and (optionally) App Check enforcement settings.
 
 Create a file at `backend/functions/.env` with this content:
 ```
 GEMINI_API_KEY=AIza_your_gemini_api_key_here
+ENFORCE_APP_CHECK=false
+```
+
+For production hardening, after App Check is configured and tested, change:
+```
+ENFORCE_APP_CHECK=true
+```
+
+If you enable App Check for web builds, also set in root `.env` or `.env.local`:
+```
+VITE_RECAPTCHA_SITE_KEY=your_recaptcha_v3_site_key
 ```
 
 Then re-deploy functions:
@@ -472,6 +482,10 @@ Then click the green **Run** button (triangle icon) at the top. Select your devi
 The app should open on the device. Test:
 - API key entry works
 - Token mode (Google Sign-In) works
+- Purchase screen loads products
+- Pending purchases reconcile on app reopen
+- Account settings opens from header and can sign out
+- Account deletion flow works and removes backend user data
 - UI looks correct
 
 **Note**: In-app purchases will NOT work during regular debug testing. You need to upload to Play Console and use the internal testing track first (see step 20).
@@ -567,13 +581,23 @@ You need a privacy policy URL. Options:
 - Host on GitHub Pages or your website
 - Enter the URL in the Privacy policy field
 
+Set the same URL in-app so users can access it from the account screen:
+```
+VITE_PRIVACY_POLICY_URL=https://your-domain.com/privacy
+```
+Then rebuild and sync:
+```
+npm run cap:sync
+```
+
 ### Other Requirements
 
 Go through all items in **Policy** > **App content**:
 - **Target audience**: Select 13+ (or appropriate age)
-- **Data safety**: Fill in the questionnaire about what data your app collects
+- **Data safety**: Fill in the questionnaire based on actual app behavior (Google sign-in, backend token balances, cloud AI processing in token mode)
 - **Ads declaration**: Select "No ads"
 - **Government apps**: Select "Not a government app"
+- **Account deletion**: Verify the in-app account deletion flow works before submission
 
 ---
 
@@ -677,9 +701,10 @@ Before building, make sure these files are configured:
 - [ ] `services/firebase.ts` — Real Firebase config values (not placeholders)
 - [ ] `backend/.firebaserc` — Your Firebase project ID
 - [ ] `backend/functions/.env` — Your server Gemini API key
-- [ ] `backend/functions/service-account.json` — Google Play service account key
+- [ ] Play service account is linked in Play Console API access with required permissions
 - [ ] `android/app/google-services.json` — Downloaded from Firebase Console
 - [ ] `android/keystore.properties` — Your keystore passwords
 - [ ] `android/release-keystore.jks` — Generated keystore file
+- [ ] `VITE_PRIVACY_POLICY_URL` is set for in-app privacy policy links
 
 **None of these should be committed to git.** They're all in `.gitignore`.

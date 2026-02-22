@@ -130,7 +130,7 @@ const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved }
         </div>
 
         <p className="font-hand text-xs text-muted-foreground mt-4 text-center">
-          Your API key is stored securely on your device and never sent to our servers.
+          Your API key is stored securely on your device and never sent to this app backend.
         </p>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { SVGVersion } from '../types';
 import { Download, Eye, Trash2, CheckSquare, Square } from 'lucide-react';
+import { sanitizeSvg } from '../services/svgSanitizer';
 
 interface GalleryProps {
   versions: SVGVersion[];
@@ -103,7 +104,7 @@ const Gallery: React.FC<GalleryProps> = ({
                                         <img src={v.thumbnail} className="w-full h-full object-contain p-4" alt={`v${v.iteration}`} />
                                     ) : (
                                         <div 
-                                          dangerouslySetInnerHTML={{ __html: v.svgCode }} 
+                                          dangerouslySetInnerHTML={{ __html: sanitizeSvg(v.svgCode) }} 
                                           className="w-full h-full flex items-center justify-center p-4 [&>svg]:w-auto [&>svg]:h-auto [&>svg]:max-w-full [&>svg]:max-h-full" 
                                         />
                                     )}

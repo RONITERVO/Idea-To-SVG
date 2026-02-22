@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Coins, Key, LogIn } from 'lucide-react';
-import { signInWithGoogle } from '../services/auth';
+import { signInWithGoogle, AuthRedirectInProgressError } from '../services/auth';
 import { setAppMode } from '../services/platform';
 import { refreshBalance } from '../services/tokenManager';
+import { PRIVACY_POLICY_URL } from '../services/appConfig';
 import SketchSvgFilters from './SketchSvgFilters';
 
 interface WelcomeScreenProps {
@@ -17,11 +18,15 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
     setIsSigningIn(true);
     setError(null);
     try {
-      await signInWithGoogle();
       setAppMode('tokens');
+      await signInWithGoogle();
       await refreshBalance();
       onComplete('tokens');
     } catch (err: any) {
+      if (err instanceof AuthRedirectInProgressError) {
+        // Redirect flow continues in browser/webview and comes back to the app.
+        return;
+      }
       console.error('Sign in failed:', err);
       setError(err.message || 'Sign in failed. Please try again.');
     } finally {
@@ -74,7 +79,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
               {isSigningIn ? 'Signing in...' : 'Get Started with Tokens'}
             </h3>
             <p className="font-hand text-sm text-muted-foreground mt-1">
-              Sign in with Google and purchase token packs. No API key needed.
+              Sign in with Google and purchase token packs. Prompts are processed in cloud services.
             </p>
           </div>
           {isSigningIn ? (
@@ -108,8 +113,20 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
         )}
 
         <p className="font-hand text-xs text-muted-foreground mt-6 text-center">
-          Open source project - your data stays on your device.
+          Open source project. Data handling details are in the privacy policy.
         </p>
+        {PRIVACY_POLICY_URL && (
+          <p className="font-hand text-xs text-center mt-1">
+            <a
+              href={PRIVACY_POLICY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline hover:text-accent/80"
+            >
+              View privacy policy
+            </a>
+          </p>
+        )}
       </div>
     </div>
   );
