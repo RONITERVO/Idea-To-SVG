@@ -1,0 +1,5 @@
+{
+  "name": "Idea To SVG_the gallery updates on ai gen now",
+  "description": "A Gemini 3 Pro powered loop that continuously generates, critiques, and refines SVG graphics based on ambiguous prompts.",
+  "requestFramePermissions": []
+}
