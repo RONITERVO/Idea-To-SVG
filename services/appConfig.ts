@@ -6,5 +6,5 @@ const normalizeUrl = (value: string | undefined): string | null => {
   return trimmed;
 };
 
-export const PRIVACY_POLICY_URL = normalizeUrl(import.meta.env.VITE_PRIVACY_POLICY_URL);
+export const PRIVACY_POLICY_URL = normalizeUrl(import.meta.env.VITE_PRIVACY_POLICY_URL || "https://RONITERVO.github.io/Idea-To-SVG/privacy.html");
 export const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL || "").trim() || null;

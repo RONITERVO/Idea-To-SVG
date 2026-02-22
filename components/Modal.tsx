@@ -2,6 +2,7 @@ import React from 'react';
 import { SVGVersion } from '../types';
 import { X, Copy, Download, MessageSquare } from 'lucide-react';
 import { sanitizeSvg } from '../services/svgSanitizer';
+import { Capacitor } from '@capacitor/core';
 
 interface ModalProps {
   version: SVGVersion | null;
@@ -30,7 +31,7 @@ const Modal: React.FC<ModalProps> = ({ version, onClose }) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-fade-in" onClick={onClose}>
       <div 
-        className="bg-card sketchy-border w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl relative" 
+        className="bg-card sketchy-border w-full max-w-6xl max-h-[90vh] flex flex-col overflow-y-auto lg:overflow-hidden shadow-2xl relative"
         onClick={e => e.stopPropagation()}
       >
         {/* Close Button */}
@@ -86,14 +87,16 @@ const Modal: React.FC<ModalProps> = ({ version, onClose }) => {
                     </div>
                 </div>
 
-                <div className="p-6 border-t border-border bg-background/50">
-                    <button 
-                        onClick={downloadSVG} 
-                        className="w-full py-3 sketchy-border-thin font-sketch text-xl hover:bg-accent hover:text-white hover:border-accent transition-all flex items-center justify-center gap-2"
-                    >
-                        <Download size={20} /> Save to Disk
-                    </button>
-                </div>
+                {Capacitor.getPlatform() === "web" && (
+                    <div className="p-6 border-t border-border bg-background/50">
+                        <button
+                            onClick={downloadSVG}
+                            className="w-full py-3 sketchy-border-thin font-sketch text-xl hover:bg-accent hover:text-white hover:border-accent transition-all flex items-center justify-center gap-2"
+                        >
+                            <Download size={20} /> Save to Disk
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
       </div>

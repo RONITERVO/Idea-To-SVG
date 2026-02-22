@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - IdeateSVG</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 700px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 { font-size: 1.6em; }
+        h2 { font-size: 1.2em; margin-top: 1.5em; }
+        p, li { font-size: 0.95em; }
+    </style>
+</head>
+<body>
+    <h1>Privacy Policy</h1>
+    <p><strong>Effective Date:</strong> February 22, 2025</p>
+    <p>IdeateSVG is an AI-powered tool that generates and refines SVG graphics using the Google Gemini API. The app can operate in two modes: a local API key mode and a token-based mode with user accounts.</p>
+
+    <h2>Data Collection and Usage</h2>
+
+    <p><strong>API Key Mode (Web):</strong> If you choose to enter a Google AI Studio API key, it is stored locally on your device. We do not collect or transmit your key to our servers. Prompts and images are sent directly from your device to Google's servers using the official Google GenAI SDK.</p>
+
+    <p><strong>Token Mode (Android / Signed-In Users):</strong> If you sign in with Google, we use Firebase Authentication to manage your account. Your token balance and purchase records are stored in Google Firestore. AI requests in this mode are processed through our Firebase backend, which handles token accounting.</p>
+
+    <p><strong>Local Storage:</strong> SVG history, thumbnails, and critique data are stored locally on your device using IndexedDB. Uninstalling the app or clearing browser data permanently removes this local data.</p>
+
+    <p><strong>In-App Purchases:</strong> Token purchases on Android are processed through Google Play Billing. Purchase tokens are verified server-side with the Google Play Developer API. We store a hashed record of each purchase to prevent duplicate crediting.</p>
+
+    <p><strong>Account Deletion:</strong> You can delete your account from within the app. This permanently removes your authentication data, token balance, and purchase records from our servers.</p>
+
+    <h2>Important Note on Google's Data Retention</h2>
+    <p>While uninstalling the app deletes your local data, content sent to the Google Gemini API is subject to Google's data retention policies. If you use a free API key, Google may retain prompts and responses to improve their products. Please do not share sensitive personal information, passwords, or confidential data in your prompts.</p>
+
+    <h2>Third-Party Services</h2>
+    <ul>
+        <li><strong>Google Gemini API</strong> &ndash; AI generation. Governed by <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>.</li>
+        <li><strong>Firebase</strong> (Authentication, Firestore, Cloud Functions, App Check) &ndash; Account and token management. Governed by <a href="https://firebase.google.com/support/privacy">Firebase's Privacy Policy</a>.</li>
+        <li><strong>Google Play Billing</strong> &ndash; In-app purchases on Android. Governed by <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>.</li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>If you have questions, please contact the developer via the <a href="https://github.com/RONITERVO/Idea-To-SVG">GitHub repository</a>.</p>
+</body>
+</html>

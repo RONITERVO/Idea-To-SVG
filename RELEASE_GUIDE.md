@@ -413,9 +413,22 @@ Now add it to Firebase:
 3. Paste the SHA-1 fingerprint
 4. Click **Save**
 
+Will need java version 21 lets borrow that from android studio
+
+$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"
+
+build
+npm run build:android
+npx cap sync android
+npm run cap:sync
+cd android
+./gradlew assembleRelease
+./gradlew assembleDebug
+(./gradlew bundleRelease) < LUO .ABB PLAY KAYPPA JULKAISUUN. VOI TEHDÄ MYÖHEMMIN
+
 Also get the **debug SHA-1** (used for testing):
 ```
-keytool -list -v -keystore "%USERPROFILE%\.android\debug.keystore" -alias androiddebugkey -storepass android
+keytool -list -v -keystore "$env:USERPROFILE\.android\debug.keystore" -alias androiddebugkey -storepass android
 ```
 Add this SHA-1 to Firebase too.
 

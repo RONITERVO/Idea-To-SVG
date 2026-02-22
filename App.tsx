@@ -599,6 +599,10 @@ const App: React.FC = () => {
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
         onKeySaved={handleApiKeySaved}
+        onBack={() => {
+          setIsApiKeyModalOpen(false);
+          setShowWelcome(true);
+        }}
       />
 
       {showEstimate && (
