@@ -165,7 +165,7 @@ const firebaseConfig = {
   appId: "1:123456789:web:abc123",
 };
 ```
----Check---
+
 Save the file.
 
 ### Add Android app to Firebase
@@ -304,7 +304,7 @@ The backend verifies purchases with Google Play using Google Cloud service-accou
 8. Click **Done**
 9. Do **not** download a JSON key file for production unless absolutely necessary
 
-### Link Service Account to Play Console
+### Link Service Account to Play Console outdated
 
 1. Go to https://play.google.com/console
 2. Click **Settings** (gear icon) > **API access**
@@ -317,6 +317,38 @@ The backend verifies purchases with Google Play using Google Cloud service-accou
    - **Manage orders and subscriptions**
 7. Under **App permissions**, add your Sketch AI app
 8. Click **Invite user** then **Send invite**
+
+The New Way to Link a Service Account
+Instead of looking for a special API menu, Google now treats Service Accounts exactly like normal human users. You just need to invite the Service Account email to your team.
+
+1. Get your Service Account Email
+Go back to your Google Cloud Console (from the first half of your instructions) and copy the email address of the play-billing-verifier you created. It will look something like play-billing-verifier@your-project-id.iam.gserviceaccount.com.
+
+2. Go to "Users and permissions" in Play Console
+In your Google Play Console, look at the main navigation menu on the far left. (You will need to look above the "Asetukset" section you are currently in).
+
+Click on Käyttäjät ja käyttöoikeudet (Users and permissions).
+
+3. Invite the Service Account
+
+Click the blue Kutsu uusia käyttäjiä (Invite new users) button.
+
+Paste your Service Account email address into the email field.
+
+4. Grant the Permissions
+Skip down to the Sovelluksen käyttöoikeudet (App permissions) or Tilin käyttöoikeudet (Account permissions) tabs, and check the exact boxes your tutorial asked for:
+
+Näytä sovelluksen tiedot ja lataa joukkoraportteja (View app information and download bulk reports)
+
+Näytä taloustiedot, tilaukset ja peruutuskyselyiden vastaukset (View financial data, orders, and cancellation survey responses)
+
+Ylläpidä tilauksia ja kestotilauksia (Manage orders and subscriptions)
+
+5. Send the Invite
+
+Click Kutsu käyttäjä (Invite user) at the bottom right.
+
+And that is it! Because it is a robot, the Service Account will automatically accept the invitation instantly.
 
 ### Runtime Credential Model
 

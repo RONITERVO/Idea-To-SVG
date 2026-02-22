@@ -66,4 +66,4 @@ export const sanitizeSvg = (rawSvg: string): string => {
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'foreignObject'],
     ALLOW_UNKNOWN_PROTOCOLS: false,
   }) as string;
-};
+}; 
