@@ -7,7 +7,7 @@ export interface GeminiResult {
   thoughts: string | null;
 }
 
-export type ThoughtCallback = (accumulatedThoughts: string) => void;
+export type ThoughtCallback = (thoughtChunk: string) => void;
 
 const streamWithThoughts = async (
   params: GenerateContentParameters,
@@ -25,7 +25,7 @@ const streamWithThoughts = async (
     for (const part of parts) {
       if (part.thought && part.text) {
         accumulatedThoughts += part.text;
-        onThought?.(accumulatedThoughts);
+        onThought?.(part.text);
       } else if (part.text) {
         accumulatedText += part.text;
       }

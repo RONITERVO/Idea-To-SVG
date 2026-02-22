@@ -20,7 +20,7 @@ const App: React.FC = () => {
     phase: AppPhase.IDLE,
     currentIteration: 0,
     lastCritique: null,
-    lastThoughts: null,
+    lastThoughts: [],
     plan: null,
     error: null,
   });
@@ -147,19 +147,25 @@ const App: React.FC = () => {
   const runRefinementLoop = async () => {
       if (!isLoopingRef.current) return;
 
-      const handleThought = (thoughts: string) => {
-        setState(prev => ({ ...prev, lastThoughts: thoughts }));
+      const handleThought = (thoughtChunk: string) => {
+        const normalized = thoughtChunk.trim();
+        if (!normalized) return;
+
+        setState(prev => {
+          if (prev.lastThoughts[0] === normalized) return prev;
+          return { ...prev, lastThoughts: [normalized, ...prev.lastThoughts].slice(0, 2) };
+        });
       };
 
       try {
           // --- INITIALIZATION PHASE ---
           // Use refs to check state to avoid stale closure issues
           if (!latestSVGRef.current) {
-              updatePhase(AppPhase.PLANNING, { error: null, lastThoughts: null });
+              updatePhase(AppPhase.PLANNING, { error: null, lastThoughts: [] });
               const planResult = await gemini.planSVG(promptRef.current, handleThought);
 
               if(!isLoopingRef.current) return;
-              updatePhase(AppPhase.GENERATING, { lastThoughts: null });
+              updatePhase(AppPhase.GENERATING, { lastThoughts: [] });
               const svgResult = await gemini.generateInitialSVG(planResult.text, handleThought);
 
               latestSVGRef.current = svgResult.text;
@@ -177,7 +183,7 @@ const App: React.FC = () => {
           // --- REFINEMENT LOOP ---
 
           // 1. RENDER
-          updatePhase(AppPhase.RENDERING, { error: null, lastThoughts: null });
+          updatePhase(AppPhase.RENDERING, { error: null, lastThoughts: [] });
           // Short delay to ensure DOM is ready before capture
           await new Promise(r => setTimeout(r, 200));
           const imageBase64 = await canvasRef.current?.captureImage();
@@ -199,7 +205,7 @@ const App: React.FC = () => {
 
           // 2. EVALUATE
           if(!isLoopingRef.current) return;
-          updatePhase(AppPhase.EVALUATING, { lastThoughts: null });
+          updatePhase(AppPhase.EVALUATING, { lastThoughts: [] });
           const critiqueResult = await gemini.evaluateSVG(imageBase64, promptRef.current, iterationRef.current, handleThought);
 
           setState(prev => ({...prev, lastCritique: critiqueResult.text}));
@@ -215,7 +221,7 @@ const App: React.FC = () => {
 
           // 3. REFINE
           if(!isLoopingRef.current) return;
-          updatePhase(AppPhase.REFINING, { lastThoughts: null });
+          updatePhase(AppPhase.REFINING, { lastThoughts: [] });
           const refineResult = await gemini.refineSVG(latestSVGRef.current, critiqueResult.text, promptRef.current, handleThought);
 
           latestSVGRef.current = refineResult.text;
@@ -274,7 +280,7 @@ const App: React.FC = () => {
         phase: AppPhase.PLANNING,
         currentIteration: 0,
         lastCritique: null,
-        lastThoughts: null,
+      lastThoughts: [],
         plan: null,
         error: null
     });
