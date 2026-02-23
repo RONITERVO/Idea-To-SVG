@@ -9,6 +9,10 @@
     "build:all:android": "npm run build:android && npx cap sync android && npm run cap:sync && cd android && set JAVA_HOME=C:\\Program Files\\Android\\Android Studio\\jbr&& gradlew assembleRelease assembleDebug bundleRelease",
     "build:web": "vite build",
     "build:android": "cross-env BUILD_TARGET=capacitor vite build",
+    "build:ghpages": "tsc && vite build --mode ghpages",
+    "deploy": "npm run build:ghpages && gh-pages -d dist -b gh-pages --add",
+    "deploy:clean-cache": "gh-pages-clean",
+    "deploy:reset-branch": "git push origin --delete gh-pages",
     "preview": "vite preview",
     "cap:sync": "npm run build:android && npx cap sync android",
     "cap:open": "npx cap open android",
@@ -32,6 +36,7 @@
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "cross-env": "^10.1.0",
+    "gh-pages": "^6.3.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
