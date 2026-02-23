@@ -88,6 +88,34 @@ This repository is configured to deploy with **GitHub Actions** using `.github/w
 
 > **Important**: `vite.config.ts` already includes `base: "/Idea-To-SVG/"`, which is required for project-site URLs like `/<repo-name>/`.
 
+### Deploying to GitHub Pages (Local CLI)
+
+If you prefer deploying from your machine instead of Actions:
+
+1. In **Settings → Pages**, set **Source** to **Deploy from a branch**.
+2. Select branch **`gh-pages`** and folder **`/ (root)`**.
+3. Run:
+
+```bash
+npm run deploy
+```
+
+If you hit Windows `ENAMETOOLONG` during publish cleanup, run this once and retry deploy:
+
+```bash
+npm run deploy:clean-cache
+npm run deploy
+```
+
+If the existing remote `gh-pages` history is bloated, reset it once and redeploy:
+
+```bash
+npm run deploy:reset-branch
+npm run deploy
+```
+
+> `deploy` uses `gh-pages --add` to avoid large cleanup argument lists on Windows.
+
 ### Prerequisites for Local Development
 
 - **Node.js** (v18 or higher)
