@@ -166,7 +166,11 @@ const isValidSessionId = (sessionId: unknown): sessionId is string => {
 
 const roundCredits = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
-  return Math.round(Math.max(0, value) * CREDIT_PRECISION_FACTOR) / CREDIT_PRECISION_FACTOR;
+  return Math.round(value * CREDIT_PRECISION_FACTOR) / CREDIT_PRECISION_FACTOR;
+};
+
+const roundCreditsNonNegative = (value: number): number => {
+  return Math.max(0, roundCredits(value));
 };
 
 const ceilCredits = (value: number): number => {
@@ -404,7 +408,7 @@ const readRequiredPendingPairState = (
 
   const pendingCostUsd = Number(sessionData[fields.pendingCostUsdField]);
   const pendingTokens = Number(sessionData[fields.pendingTokensField]);
-  const pendingReservedCredits = roundCredits(Number(sessionData[fields.pendingReservedCreditsField]) || 0);
+  const pendingReservedCredits = roundCreditsNonNegative(Number(sessionData[fields.pendingReservedCreditsField]) || 0);
   const hasPendingCost = Number.isFinite(pendingCostUsd) && pendingCostUsd > EPSILON;
   const hasPendingTokens = Number.isFinite(pendingTokens) && pendingTokens > 0;
 
@@ -430,7 +434,7 @@ const reserveCreditsForAction = async (
 
   const pendingGenerateDelta = action === "plan" ? 1 : action === "generate" ? -1 : 0;
   const pendingRefineDelta = action === "evaluate" ? 1 : action === "refine" ? -1 : 0;
-  const requestedReserve = roundCredits(Math.max(0, provisionalChargeEstimate));
+  const requestedReserve = roundCreditsNonNegative(provisionalChargeEstimate);
 
   return db.runTransaction(async (tx) => {
     const [userDoc, sessionDoc] = await Promise.all([tx.get(userRef), tx.get(sessionRef)]);
@@ -438,8 +442,8 @@ const reserveCreditsForAction = async (
     const sessionData = sessionDoc.data() || {};
     const currentPendingGenerate = sessionDoc.exists ? (Number(sessionData.pendingGenerate) || 0) : 0;
     const currentPendingRefine = sessionDoc.exists ? (Number(sessionData.pendingRefine) || 0) : 0;
-    const currentPlanReservedCredits = roundCredits(Number(sessionData.pendingPlanReservedCredits) || 0);
-    const currentEvaluateReservedCredits = roundCredits(Number(sessionData.pendingEvaluateReservedCredits) || 0);
+    const currentPlanReservedCredits = roundCreditsNonNegative(Number(sessionData.pendingPlanReservedCredits) || 0);
+    const currentEvaluateReservedCredits = roundCreditsNonNegative(Number(sessionData.pendingEvaluateReservedCredits) || 0);
     const provisionalCharge =
       action === "generate"
         ? ceilCredits(Math.max(0, requestedReserve - currentPlanReservedCredits))
@@ -482,7 +486,7 @@ const reserveCreditsForAction = async (
         balance: newBalance,
         gifBalance: newBalance,
         totalConsumed: admin.firestore.FieldValue.increment(provisionalCharge),
-        creditDebt: roundCredits(Math.max(0, -newBalance)),
+        creditDebt: roundCreditsNonNegative(-newBalance),
         hasNegativeBalance: newBalance < 0,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         ...(userDoc.exists ? {} : {
@@ -517,10 +521,10 @@ const reserveCreditsForAction = async (
       sessionUpdate.pendingEvaluateTokens = 0;
     }
     if (action === "generate") {
-      sessionUpdate.pendingPlanReservedCredits = roundCredits(currentPlanReservedCredits + provisionalCharge);
+      sessionUpdate.pendingPlanReservedCredits = roundCreditsNonNegative(currentPlanReservedCredits + provisionalCharge);
     }
     if (action === "refine") {
-      sessionUpdate.pendingEvaluateReservedCredits = roundCredits(currentEvaluateReservedCredits + provisionalCharge);
+      sessionUpdate.pendingEvaluateReservedCredits = roundCreditsNonNegative(currentEvaluateReservedCredits + provisionalCharge);
     }
 
     tx.set(
@@ -575,7 +579,7 @@ const settleGifOrEvaluate = ({
       balance: newBalance,
       gifBalance: newBalance,
       totalConsumed: admin.firestore.FieldValue.increment(additionalCredits),
-      creditDebt: roundCredits(Math.max(0, -newBalance)),
+      creditDebt: roundCreditsNonNegative(-newBalance),
       hasNegativeBalance: newBalance < 0,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
@@ -625,7 +629,7 @@ const settleActionBilling = async (
     const sessionData = sessionDoc.data() || {};
 
     if (options?.rollbackOnly) {
-      const refundCredits = roundCredits(Math.max(0, options.provisionalChargedCredits || 0));
+      const refundCredits = roundCreditsNonNegative(options.provisionalChargedCredits || 0);
       const currentPendingGenerate = sessionDoc.exists ? (Number(sessionData.pendingGenerate) || 0) : 0;
       const currentPendingRefine = sessionDoc.exists ? (Number(sessionData.pendingRefine) || 0) : 0;
       const pendingGenerateDelta = action === "plan" ? -1 : action === "generate" ? 1 : 0;
@@ -639,7 +643,7 @@ const settleActionBilling = async (
             balance: newBalance,
             gifBalance: newBalance,
             totalConsumed: admin.firestore.FieldValue.increment(-refundCredits),
-            creditDebt: roundCredits(Math.max(0, -newBalance)),
+            creditDebt: roundCreditsNonNegative(-newBalance),
             hasNegativeBalance: newBalance < 0,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             ...(userDoc.exists ? {} : {
@@ -652,14 +656,14 @@ const settleActionBilling = async (
       }
 
       const rollbackFields = reservationFieldsForAction(action);
-      const currentReserved = roundCredits(Number(sessionData[rollbackFields.pendingReservedCreditsField]) || 0);
+      const currentReserved = roundCreditsNonNegative(Number(sessionData[rollbackFields.pendingReservedCreditsField]) || 0);
       const sessionUpdate: Record<string, unknown> = {
         uid,
         sessionId,
         status: "active",
         pendingGenerate: Math.max(0, currentPendingGenerate + pendingGenerateDelta),
         pendingRefine: Math.max(0, currentPendingRefine + pendingRefineDelta),
-        [rollbackFields.pendingReservedCreditsField]: roundCredits(Math.max(0, currentReserved - refundCredits)),
+        [rollbackFields.pendingReservedCreditsField]: roundCreditsNonNegative(currentReserved - refundCredits),
         lastFailedAction: action,
         lastFailureReason: options.failureReason || "action_failed",
         lastFailedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -923,7 +927,7 @@ export const verifyAndCreditPurchase = onCall(
             balance: newBal,
             gifBalance: newBal,
             totalPurchased: admin.firestore.FieldValue.increment(creditsToGrant),
-            creditDebt: roundCredits(Math.max(0, -newBal)),
+            creditDebt: roundCreditsNonNegative(-newBal),
             hasNegativeBalance: newBal < 0,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             ...(userDoc.exists ? {} : {
@@ -1465,12 +1469,18 @@ export const streamGenerateWithTokens = onRequest(
         res.end();
       } catch (error) {
         await rollbackFailedReservation(uid, sessionId, typedAction, reservationForRollback, error);
+        reservationForRollback = null;
         throw error;
       }
     } catch (error: any) {
       if (heartbeat) {
         clearInterval(heartbeat);
         heartbeat = null;
+      }
+
+      if (reservationForRollback && uidForLog && actionForLog && sessionIdForLog) {
+        await rollbackFailedReservation(uidForLog, sessionIdForLog, actionForLog, reservationForRollback, error);
+        reservationForRollback = null;
       }
 
       const safeMessage = error instanceof HttpsError
