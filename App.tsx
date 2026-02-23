@@ -4,11 +4,13 @@ import { AppPhase, GenerationState, SVGVersion } from './types';
 import * as db from './services/db';
 import * as gemini from './services/gemini';
 import { loadApiKey, initApiKey, ApiKeyError } from './services/apiKeyStorage';
-import { isTokenMode as checkTokenMode } from './services/platform';
+import { isTokenMode as checkTokenMode, setAppMode } from './services/platform';
 import {
   onAuthStateChanged,
   getCurrentUser,
   signOut,
+  signInWithGoogle,
+  AuthRedirectInProgressError,
   completePendingRedirectSignIn,
 } from './services/auth';
 import { refreshBalance, subscribeToBalance } from './services/tokenManager';
@@ -28,7 +30,6 @@ import SketchSvgFilters from './components/SketchSvgFilters';
 import ApiKeyModal from './components/ApiKeyModal';
 import TokenEstimate from './components/TokenEstimate';
 import TokenPurchase from './components/TokenPurchase';
-import WelcomeScreen from './components/WelcomeScreen';
 import AccountModal from './components/AccountModal';
 
 const App: React.FC = () => {
@@ -54,15 +55,18 @@ const App: React.FC = () => {
   const [isTokenMode, setIsTokenMode] = useState<boolean>(false);
   const [tokenBalance, setTokenBalance] = useState<number>(0);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [showWelcome, setShowWelcome] = useState<boolean>(false);
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
+  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
 
   // Token Estimation State
   const [tokenEstimate, setTokenEstimate] = useState<TokenEstimateResult | null>(null);
   const [isEstimating, setIsEstimating] = useState<boolean>(false);
   const [showEstimate, setShowEstimate] = useState<boolean>(false);
+  const [autoRefineEnabled, setAutoRefineEnabled] = useState<boolean>(false);
+  const [stopAfterCurrentResult, setStopAfterCurrentResult] = useState<boolean>(false);
+  const [streamedSvgCode, setStreamedSvgCode] = useState<string>('');
 
   // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -73,9 +77,14 @@ const App: React.FC = () => {
   const latestSVGRef = useRef<string>('');
   const promptRef = useRef<string>('');
   const currentVersionIdRef = useRef<string>('');
+  const generationSessionIdRef = useRef<string>('');
   const iterationRef = useRef(0);
   const phaseRef = useRef<AppPhase>(AppPhase.IDLE);
   const pendingRecoveryForUidRef = useRef<string | null>(null);
+  const autoRefineEnabledRef = useRef<boolean>(false);
+  const stopAfterCurrentRef = useRef<boolean>(false);
+  const streamedSvgBufferRef = useRef<string>('');
+  const streamedSvgFlushPendingRef = useRef<boolean>(false);
 
   const reconcilePendingPurchases = useCallback(async (uid: string) => {
     if (pendingRecoveryForUidRef.current === uid) return;
@@ -106,6 +115,14 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    autoRefineEnabledRef.current = autoRefineEnabled;
+  }, [autoRefineEnabled]);
+
+  useEffect(() => {
+    stopAfterCurrentRef.current = stopAfterCurrentResult;
+  }, [stopAfterCurrentResult]);
+
+  useEffect(() => {
     const initialize = async () => {
       try {
         const saved = await db.getAllVersions();
@@ -130,10 +147,8 @@ const App: React.FC = () => {
       setIsTokenMode(tokenMode);
       const currentUser = redirectUser || getCurrentUser();
 
-      if (!apiKey && !tokenMode) {
+      if ((!apiKey && !tokenMode) || (tokenMode && !currentUser)) {
         setIsApiKeyModalOpen(true);
-      } else if (!apiKey && tokenMode) {
-        setShowWelcome(!currentUser);
       }
     };
 
@@ -143,14 +158,10 @@ const App: React.FC = () => {
     const unsubAuth = onAuthStateChanged((user) => {
       setIsAuthenticated(!!user);
       if (user && checkTokenMode()) {
-        setShowWelcome(false);
         refreshBalance().then(setTokenBalance).catch(console.error);
         reconcilePendingPurchases(user.uid).catch(console.error);
       } else if (!user) {
         pendingRecoveryForUidRef.current = null;
-        if (checkTokenMode() && !loadApiKey()) {
-          setShowWelcome(true);
-        }
       }
     });
 
@@ -177,10 +188,43 @@ const App: React.FC = () => {
     setState(prev => ({ ...prev, phase, ...extra }));
   };
 
+  const resetStreamedSvgPreview = useCallback(() => {
+    streamedSvgBufferRef.current = '';
+    streamedSvgFlushPendingRef.current = false;
+    setStreamedSvgCode('');
+  }, []);
+
+  const appendStreamedSvgChunk = useCallback((chunk: string) => {
+    if (!chunk) return;
+    streamedSvgBufferRef.current += chunk;
+    if (streamedSvgFlushPendingRef.current) return;
+    streamedSvgFlushPendingRef.current = true;
+    requestAnimationFrame(() => {
+      streamedSvgFlushPendingRef.current = false;
+      setStreamedSvgCode(streamedSvgBufferRef.current);
+    });
+  }, []);
+
   const stopLoop = useCallback(() => {
     isLoopingRef.current = false;
     phaseRef.current = AppPhase.STOPPED;
     updatePhase(AppPhase.STOPPED);
+    stopAfterCurrentRef.current = false;
+    setStopAfterCurrentResult(false);
+  }, [updatePhase]);
+
+  const handleAutoRefineToggle = useCallback((enabled: boolean) => {
+    setAutoRefineEnabled(enabled);
+    autoRefineEnabledRef.current = enabled;
+
+    if (!enabled && isLoopingRef.current) {
+      // Finish the in-flight generation step, then stop on the next completed result.
+      stopAfterCurrentRef.current = true;
+      setStopAfterCurrentResult(true);
+    } else if (enabled) {
+      stopAfterCurrentRef.current = false;
+      setStopAfterCurrentResult(false);
+    }
   }, []);
 
   const saveToHistory = async (id: string, svgCode: string, critique: string | undefined, iteration: number, thumbnail: string) => {
@@ -261,12 +305,23 @@ const App: React.FC = () => {
           // --- INITIALIZATION PHASE ---
           // Use refs to check state to avoid stale closure issues
           if (!latestSVGRef.current) {
+              resetStreamedSvgPreview();
               updatePhase(AppPhase.PLANNING, { error: null, lastThoughts: [] });
-              const planResult = await gemini.planSVG(promptRef.current, handleThought);
+              const planResult = await gemini.planSVG(
+                promptRef.current,
+                handleThought,
+                generationSessionIdRef.current
+              );
 
               if(!isLoopingRef.current) return;
+              resetStreamedSvgPreview();
               updatePhase(AppPhase.GENERATING, { lastThoughts: [] });
-              const svgResult = await gemini.generateInitialSVG(planResult.text, handleThought);
+              const svgResult = await gemini.generateInitialSVG(
+                planResult.text,
+                handleThought,
+                generationSessionIdRef.current,
+                appendStreamedSvgChunk
+              );
               const safeInitialSvg = sanitizeSvg(svgResult.text);
 
               latestSVGRef.current = safeInitialSvg;
@@ -276,6 +331,13 @@ const App: React.FC = () => {
 
               iterationRef.current = 1;
               setState(prev => ({...prev, currentIteration: 1, plan: planResult.text }));
+
+              if (!autoRefineEnabledRef.current || stopAfterCurrentRef.current) {
+                stopAfterCurrentRef.current = false;
+                setStopAfterCurrentResult(false);
+                stopLoop();
+                return;
+              }
 
               setTimeout(runRefinementLoop, 1500);
               return;
@@ -307,7 +369,13 @@ const App: React.FC = () => {
           // 2. EVALUATE
           if(!isLoopingRef.current) return;
           updatePhase(AppPhase.EVALUATING, { lastThoughts: [] });
-          const critiqueResult = await gemini.evaluateSVG(imageBase64, promptRef.current, iterationRef.current, handleThought);
+          const critiqueResult = await gemini.evaluateSVG(
+            imageBase64,
+            promptRef.current,
+            iterationRef.current,
+            handleThought,
+            generationSessionIdRef.current
+          );
 
           setState(prev => ({...prev, lastCritique: critiqueResult.text}));
 
@@ -322,8 +390,16 @@ const App: React.FC = () => {
 
           // 3. REFINE
           if(!isLoopingRef.current) return;
+          resetStreamedSvgPreview();
           updatePhase(AppPhase.REFINING, { lastThoughts: [] });
-          const refineResult = await gemini.refineSVG(latestSVGRef.current, critiqueResult.text, promptRef.current, handleThought);
+          const refineResult = await gemini.refineSVG(
+            latestSVGRef.current,
+            critiqueResult.text,
+            promptRef.current,
+            handleThought,
+            generationSessionIdRef.current,
+            appendStreamedSvgChunk
+          );
           const safeRefinedSvg = sanitizeSvg(refineResult.text);
 
           latestSVGRef.current = safeRefinedSvg;
@@ -333,6 +409,13 @@ const App: React.FC = () => {
           currentVersionIdRef.current = uuidv4();
           iterationRef.current += 1;
           setState(prev => ({...prev, currentIteration: prev.currentIteration + 1}));
+
+          if (!autoRefineEnabledRef.current || stopAfterCurrentRef.current) {
+            stopAfterCurrentRef.current = false;
+            setStopAfterCurrentResult(false);
+            stopLoop();
+            return;
+          }
 
           // 4. REPEAT
           setTimeout(runRefinementLoop, 2000);
@@ -348,17 +431,28 @@ const App: React.FC = () => {
               return;
           }
 
-          // Check for insufficient tokens
-          if (e?.code === 'functions/resource-exhausted') {
+          // Check for insufficient GIF credits
+          const errorMessage = String(e?.message || '');
+          const isInsufficientCredits =
+            e?.code === 'functions/resource-exhausted' ||
+            /insufficient gif credits/i.test(errorMessage);
+
+          if (isInsufficientCredits) {
               stopLoop();
               setIsPurchaseModalOpen(true);
-              updatePhase(AppPhase.STOPPED, { error: 'Insufficient tokens. Purchase more to continue.' });
+              updatePhase(AppPhase.STOPPED, { error: 'Insufficient GIF credits. Charges are settled with fractional precision and can exceed the shown whole-number estimate.' });
+              return;
+          }
+
+          if (e?.code === 'functions/failed-precondition') {
+              stopLoop();
+              updatePhase(AppPhase.STOPPED, { error: e?.message || 'Generation state became invalid. Start a new run.' });
               return;
           }
 
           if (isLoopingRef.current) {
-             setState(prev => ({...prev, error: `Interruption detected: ${e.message || 'Unknown error'}. Retrying in 5s...` }));
-             setTimeout(runRefinementLoop, 5000);
+             stopLoop();
+             updatePhase(AppPhase.STOPPED, { error: `Generation stopped: ${e.message || 'Unknown error'}. Start again to continue.` });
           } else {
              updatePhase(AppPhase.STOPPED, { error: e.message });
           }
@@ -369,22 +463,27 @@ const App: React.FC = () => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
 
-    // Check if user has API key OR is in token mode with auth
+    // In API-key mode, key is required. In credit mode, sign-in is required.
     const apiKey = loadApiKey();
-    if (!apiKey && !isTokenMode) {
+    if (!isTokenMode && !apiKey) {
       setIsApiKeyModalOpen(true);
       return;
     }
 
-    if (isTokenMode && !apiKey && !isAuthenticated) {
-      setShowWelcome(true);
+    if (isTokenMode && !isAuthenticated) {
+      setIsApiKeyModalOpen(true);
       return;
     }
 
-    // Show token estimate before starting
+    // Show generation estimate and auto-run toggle before starting.
     setShowEstimate(true);
     setIsEstimating(true);
     setTokenEstimate(null);
+    setAutoRefineEnabled(false);
+    autoRefineEnabledRef.current = false;
+    setStopAfterCurrentResult(false);
+    stopAfterCurrentRef.current = false;
+    resetStreamedSvgPreview();
 
     try {
       const estimate = await gemini.estimateFullCycleCost(trimmed);
@@ -395,7 +494,12 @@ const App: React.FC = () => {
       setTokenEstimate({
         estimatedInputTokens: 0,
         estimatedOutputTokens: 0,
-        estimatedTotal: 0,
+        estimatedTotalTokens: 0,
+        estimatedGifCredits: 1,
+        estimatedRawGifCredits: 1,
+        estimatedDisplayGifCredits: 1,
+        billingDisplayWholeCredits: true,
+        billingRoundedToWholeCredits: true,
       });
     } finally {
       setIsEstimating(false);
@@ -412,11 +516,16 @@ const App: React.FC = () => {
     setPrompt(trimmed);
     promptRef.current = trimmed;
     isLoopingRef.current = true;
+    autoRefineEnabledRef.current = autoRefineEnabled;
+    stopAfterCurrentRef.current = false;
+    setStopAfterCurrentResult(false);
 
     // Reset state for a fresh run
     latestSVGRef.current = '';
     setCurrentSVG('');
+    resetStreamedSvgPreview();
     currentVersionIdRef.current = '';
+    generationSessionIdRef.current = uuidv4();
     iterationRef.current = 0;
     phaseRef.current = AppPhase.IDLE;
 
@@ -440,8 +549,17 @@ const App: React.FC = () => {
 
   const handleApiKeySaved = () => {
     setHasApiKey(true);
-    setIsTokenMode(false); // Switch to API key mode
     gemini.resetAI(); // Reset the API client to use the new key
+  };
+
+  const handleModeChange = (mode: 'tokens' | 'apikey') => {
+    const useTokens = mode === 'tokens';
+    setAppMode(mode);
+    setIsTokenMode(useTokens);
+
+    if (useTokens && isAuthenticated) {
+      refreshBalance().then(setTokenBalance).catch(console.error);
+    }
   };
 
   const handleOpenApiKeyModal = () => {
@@ -452,16 +570,28 @@ const App: React.FC = () => {
     setIsAccountModalOpen(true);
   };
 
+  const handleSignInForCredits = async () => {
+    setIsSigningIn(true);
+    try {
+      await signInWithGoogle();
+      await refreshBalance().then(setTokenBalance).catch(console.error);
+    } catch (err) {
+      if (err instanceof AuthRedirectInProgressError) {
+        return;
+      }
+      console.error('Sign in failed:', err);
+      throw err;
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
   const handleSignOut = async () => {
     stopLoop();
     await signOut();
     pendingRecoveryForUidRef.current = null;
     setTokenBalance(0);
     setIsAuthenticated(false);
-
-    if (checkTokenMode() && !loadApiKey()) {
-      setShowWelcome(true);
-    }
   };
 
   const handleDeleteAccount = async () => {
@@ -495,20 +625,8 @@ const App: React.FC = () => {
       setVersions([]);
       setViewingVersion(null);
       setIsAuthenticated(false);
-      setShowWelcome(true);
     } finally {
       setIsDeletingAccount(false);
-    }
-  };
-
-  const handleWelcomeComplete = (mode: 'tokens' | 'apikey') => {
-    setShowWelcome(false);
-    if (mode === 'apikey') {
-      setIsApiKeyModalOpen(true);
-      setIsTokenMode(false);
-    } else {
-      setIsTokenMode(true);
-      // Balance will be refreshed by auth state listener
     }
   };
 
@@ -520,11 +638,6 @@ const App: React.FC = () => {
   const isThinking = state.phase !== AppPhase.IDLE &&
                      state.phase !== AppPhase.STOPPED &&
                      state.phase !== AppPhase.RENDERING;
-
-  // Show welcome screen for first-time Android users
-  if (showWelcome) {
-    return <WelcomeScreen onComplete={handleWelcomeComplete} />;
-  }
 
   return (
     <div className="min-h-screen p-4 md:p-10 overflow-x-hidden relative">
@@ -546,9 +659,9 @@ const App: React.FC = () => {
       <div className="max-w-[1200px] mx-auto relative z-10">
         <Header
           onOpenApiKeyModal={handleOpenApiKeyModal}
-          isTokenMode={isTokenMode && !hasApiKey}
+          isTokenMode={isTokenMode}
           onOpenPurchaseModal={() => setIsPurchaseModalOpen(true)}
-          canManageAccount={isTokenMode && !hasApiKey && isAuthenticated}
+          canManageAccount={isAuthenticated}
           onOpenAccountModal={handleOpenAccountModal}
         />
 
@@ -558,6 +671,9 @@ const App: React.FC = () => {
             setPrompt={setPrompt}
             onStart={requestStartLoop}
             onStop={stopLoop}
+            autoRefineEnabled={autoRefineEnabled}
+            onAutoRefineChange={handleAutoRefineToggle}
+            stopAfterCurrentResult={stopAfterCurrentResult}
             svgCode={currentSVG}
             canvasRef={canvasRef}
             critique={state.lastCritique}
@@ -565,6 +681,7 @@ const App: React.FC = () => {
             isThinking={isThinking}
             plan={state.plan}
             iteration={state.currentIteration}
+            streamedSvgCode={streamedSvgCode}
         />
 
         {state.error && isLoopingRef.current && (
@@ -623,22 +740,33 @@ const App: React.FC = () => {
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
         onKeySaved={handleApiKeySaved}
-        onBack={() => {
-          setIsApiKeyModalOpen(false);
-          setShowWelcome(true);
-        }}
+        hasApiKey={hasApiKey}
+        isTokenMode={isTokenMode}
+        isAuthenticated={isAuthenticated}
+        isSigningIn={isSigningIn}
+        onModeChange={handleModeChange}
+        onOpenPurchase={() => setIsPurchaseModalOpen(true)}
+        onSignIn={handleSignInForCredits}
+        onSignOut={handleSignOut}
+        onOpenAccount={handleOpenAccountModal}
       />
 
       {showEstimate && (
         <TokenEstimate
           estimate={tokenEstimate}
           balance={tokenBalance}
-          isTokenMode={isTokenMode && !hasApiKey}
+          isTokenMode={isTokenMode}
           isLoading={isEstimating}
+          autoRefineEnabled={autoRefineEnabled}
+          onAutoRefineChange={setAutoRefineEnabled}
           onConfirm={confirmStart}
           onCancel={cancelEstimate}
           onBuyTokens={() => {
             cancelEstimate();
+            if (!isAuthenticated) {
+              setIsApiKeyModalOpen(true);
+              return;
+            }
             setIsPurchaseModalOpen(true);
           }}
         />

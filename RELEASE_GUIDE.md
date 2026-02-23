@@ -4,6 +4,38 @@ Step-by-step instructions to go from source code to a published Android app on G
 
 ---
 
+## Release Update (February 23, 2026)
+
+If your Firebase backend is already deployed and the app is not live yet, use this short path:
+
+1. Copy env templates and fill real values:
+   - `copy .env.example .env`
+   - `copy backend\functions\.env.example backend\functions\.env`
+2. Confirm `ENFORCE_APP_CHECK=true` in `backend/functions/.env` for production.
+3. Deploy backend updates:
+   - `cd backend`
+   - `firebase deploy --only functions,firestore:rules`
+   - `cd ..`
+4. Build web assets for Android:
+   - `npm run build:android`
+5. Sync Capacitor:
+   - `npx cap sync android`
+6. Open Android Studio and run a final internal test build on a device:
+   - Sign-in
+   - Credit purchase
+   - One full generation cycle
+7. Build release bundle:
+   - `npm run build:aab`
+8. Upload `android/app/build/outputs/bundle/release/app-release.aab` to Play Console Internal Testing, verify purchases and generation there, then promote to production when checks pass.
+
+Important billing behavior in this release:
+- Billing is cost-first from actual token usage (input/output/thought priced separately).
+- Ledger charges settle in fractional credits.
+- Per-generation estimate labels are shown as whole credits for readability.
+- Final settled charge can exceed initial estimate when actual usage is higher.
+
+---
+
 ## Table of Contents
 
 1. [Install Prerequisites](#1-install-prerequisites)
@@ -157,20 +189,23 @@ The security rules from `backend/firestore.rules` will be deployed later when yo
 6. Click **Register app**
 7. You'll see a code block with `firebaseConfig`. Copy those values.
 
-Now open the file `services/firebase.ts` in your project and replace the placeholder values:
+Now put these values in your root `.env` file (copy from `.env.example` first):
 
-```ts
-const firebaseConfig = {
-  apiKey: "AIzaSy...",           // paste your real apiKey
-  authDomain: "sketch-ai-abc12.firebaseapp.com",
-  projectId: "sketch-ai-abc12",
-  storageBucket: "sketch-ai-abc12.firebasestorage.app",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abc123",
-};
+```text
+copy .env.example .env
 ```
 
-Save the file.
+Then update:
+
+```text
+VITE_FIREBASE_API_KEY=AIzaSy...
+VITE_FIREBASE_AUTH_DOMAIN=sketch-ai-abc12.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=sketch-ai-abc12
+VITE_FIREBASE_STORAGE_BUCKET=sketch-ai-abc12.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_APP_ID=1:123456789:web:abc123
+VITE_FIREBASE_MEASUREMENT_ID=G-XXXXXXXXXX
+```
 
 ### Add Android app to Firebase
 
@@ -458,26 +493,54 @@ The server uses its own Gemini API key to make requests on behalf of token-payin
 
 ## 16. Set Firebase Environment Variables
 
-The backend functions need your Gemini API key and (optionally) App Check enforcement settings.
+The backend functions and frontend use environment files. Use the included example files and then fill real values.
 
-Create a file at `backend/functions/.env` with this content:
+### Backend (`backend/functions/.env`)
 
-```text
-GEMINI_API_KEY=AIza_your_gemini_api_key_here
-ENFORCE_APP_CHECK=false
-```
-
-For production hardening, after App Check is configured and tested, change:
+Copy the example:
 
 ```text
-ENFORCE_APP_CHECK=true
+copy backend\functions\.env.example backend\functions\.env
 ```
 
-If you enable App Check for web builds, also set in root `.env` or `.env.local`:
+Set required values:
+- `GEMINI_API_KEY` (server Gemini key)
+- `ENFORCE_APP_CHECK=true` for production (after App Check is fully configured/tested)
+
+Optional pricing/cost variables are already documented in `backend/functions/.env.example`.
+
+### Frontend (`.env`)
+
+Copy the example:
 
 ```text
-VITE_RECAPTCHA_SITE_KEY=your_recaptcha_v3_site_key
+copy .env.example .env
 ```
+
+Set required frontend values:
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_MEASUREMENT_ID`
+- `VITE_PRIVACY_POLICY_URL`
+- `VITE_SUPPORT_EMAIL`
+
+Optional:
+- `VITE_RECAPTCHA_SITE_KEY` (recommended if App Check is enabled for web)
+- `VITE_FIREBASE_FUNCTIONS_REGION` (defaults to `us-central1`)
+- `VITE_FUNCTIONS_BASE_URL` (only if you need a custom Functions base URL)
+- `GEMINI_API_KEY` (local development fallback only)
+
+### Billing policy for release
+
+Cloud billing is smooth and cost-based:
+- Actual model usage is converted to USD first, then mapped to fractional GIF credits.
+- Balance and settlement use fractional credits.
+- Per-generation estimates in UI are displayed as whole credits.
+- A provisional reserve is taken before billed phases, then final charge is settled from actual usage.
 
 Then re-deploy functions:
 
@@ -541,6 +604,7 @@ The app should open on the device. Test:
 - Token mode (Google Sign-In) works
 - Purchase screen loads products
 - Pending purchases reconcile on app reopen
+- Real-time generation stream shows thought/output chunks while cloud generation is running
 - Account settings opens from header and can sign out
 - Account deletion flow works and removes backend user data
 - UI looks correct
@@ -762,15 +826,16 @@ This builds for web deployment (GitHub Pages, etc.).
 
 Before building, make sure these files are configured:
 
-- [ ] `services/firebase.ts` — Real Firebase config values (not placeholders)
-- [ ] `backend/.firebaserc` — Your Firebase project ID
-- [ ] `backend/functions/.env` — Your server Gemini API key
+- [ ] `.env` - Real frontend values copied from `.env.example`
+- [ ] `backend/.firebaserc` - Your Firebase project ID
+- [ ] `backend/functions/.env` - Real backend values copied from `backend/functions/.env.example`
 - [ ] Play service account is linked in Play Console API access with required permissions
-- [ ] `android/app/google-services.json` — Downloaded from Firebase Console
-- [ ] `android/keystore.properties` — Your keystore passwords
-- [ ] `android/release-keystore.jks` — Generated keystore file
+- [ ] `android/app/google-services.json` - Downloaded from Firebase Console
+- [ ] `android/keystore.properties` - Your keystore passwords
+- [ ] `android/release-keystore.jks` - Generated keystore file
 - [ ] `VITE_PRIVACY_POLICY_URL` is set for in-app privacy policy links
 
-**None of these should be committed to git.** They're all in `.gitignore`.
+**None of these should be committed to git.** They are all in `.gitignore`.
+
 
 

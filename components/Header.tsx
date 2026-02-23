@@ -60,8 +60,8 @@ const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onOpenApiKeyModal}
           className="p-2 text-muted-foreground hover:text-foreground transition-colors hover:bg-muted/30 rounded-lg"
-          title="Manage API Key"
-          aria-label="Manage API Key"
+          title="Settings"
+          aria-label="Settings"
         >
           <Key size={20} />
         </button>

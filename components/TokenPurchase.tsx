@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Coins, ShoppingCart, Loader2 } from 'lucide-react';
-import { queryProducts, purchaseProduct, TOKEN_AMOUNTS, type Product } from '../services/billing';
+import { queryProducts, purchaseProduct, GIF_CREDIT_PACKS, type Product } from '../services/billing';
 import { verifyPurchase } from '../services/backendApi';
-import { refreshBalance, formatTokens } from '../services/tokenManager';
+import { refreshBalance } from '../services/tokenManager';
 import { isAndroid } from '../services/platform';
 import { getCurrentUser } from '../services/auth';
 
@@ -87,7 +87,7 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
     try {
       const user = getCurrentUser();
       if (!user) {
-        throw new Error('Please sign in to purchase tokens.');
+        throw new Error('Please sign in to purchase GIF credits.');
       }
 
       // Launch native purchase flow
@@ -99,12 +99,12 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
       // Refresh balance
       await refreshBalance();
 
-      const tokenInfo = TOKEN_AMOUNTS[productId];
+      const packInfo = GIF_CREDIT_PACKS[productId];
       if (verification.alreadyCredited) {
         setSuccess('This purchase was already credited to your account.');
       } else {
-        const granted = verification.tokensGranted ?? tokenInfo?.tokens ?? 0;
-        setSuccess(`Added ${formatTokens(granted)} tokens to your balance!`);
+        const granted = verification.creditsGranted ?? verification.tokensGranted ?? packInfo?.credits ?? 0;
+        setSuccess(`Added ${granted} GIF credits to your balance!`);
       }
 
       if (purchaseCompleteTimerRef.current !== null) {
@@ -158,8 +158,8 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
             <ShoppingCart className="text-accent" size={28} />
           </div>
           <div>
-            <h2 className="font-sketch text-3xl text-foreground">Get Tokens</h2>
-            <p className="font-hand text-sm text-muted-foreground">Power your AI generations</p>
+            <h2 className="font-sketch text-3xl text-foreground">Get GIF Credits</h2>
+            <p className="font-hand text-sm text-muted-foreground">Fractional credit settlement with whole-number estimate display</p>
           </div>
         </div>
 
@@ -171,7 +171,7 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
         ) : (
           <div className="space-y-3">
             {products.map((product) => {
-              const tokenInfo = TOKEN_AMOUNTS[product.productId];
+              const packInfo = GIF_CREDIT_PACKS[product.productId];
               const isBuying = isPurchasing === product.productId;
 
               return (
@@ -189,10 +189,10 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="font-sketch text-lg text-foreground">
-                      {tokenInfo?.label || product.title}
+                      {packInfo?.label || product.title}
                     </h3>
                     <p className="font-hand text-sm text-muted-foreground">
-                      {formatTokens(tokenInfo?.tokens || 0)} tokens
+                      {(packInfo?.credits || 0)} GIF credits
                     </p>
                   </div>
                   <div className="flex-shrink-0 text-right">
@@ -222,10 +222,16 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
           </div>
         )}
 
+        <div className="mt-4 p-3 bg-muted/20 rounded-lg">
+          <p className="font-hand text-xs text-muted-foreground">
+            Charges are settled with fractional precision from actual token usage. Per-generation previews are shown as whole numbers for readability.
+          </p>
+        </div>
+
         {!isAndroid() && (
           <div className="mt-4 p-3 bg-muted/30 rounded-lg">
             <p className="font-hand text-xs text-muted-foreground text-center">
-              Token purchases are available in the Android app via Google Play.
+              GIF credit purchases are available in the Android app via Google Play.
             </p>
           </div>
         )}

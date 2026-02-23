@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFunctions } from "firebase/functions";
+import type { AppCheck } from "firebase/app-check";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
 
 const firebaseConfig = {
@@ -26,14 +27,17 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const functions = getFunctions(app);
 export const googleProvider = new GoogleAuthProvider();
+let appCheckInstance: AppCheck | null = null;
 
 const appCheckSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
 if (typeof window !== 'undefined' && appCheckSiteKey) {
-  initializeAppCheck(app, {
+  appCheckInstance = initializeAppCheck(app, {
     provider: new ReCaptchaV3Provider(appCheckSiteKey),
     isTokenAutoRefreshEnabled: true,
   });
 }
+
+export const getInitializedAppCheck = (): AppCheck | null => appCheckInstance;
 
 // Uncomment for local development with Firebase emulator:
 // connectFunctionsEmulator(functions, "localhost", 5001);

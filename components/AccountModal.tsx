@@ -113,7 +113,7 @@ const AccountModal: React.FC<AccountModalProps> = ({
               <div className="flex items-start gap-2 text-destructive">
                 <AlertTriangle size={16} className="mt-0.5" />
                 <div className="font-hand text-sm">
-                  Delete your account and all token data from this app backend.
+                  Delete your account and all GIF credit data from this app backend.
                   This action cannot be undone.
                 </div>
               </div>
@@ -144,7 +144,7 @@ const AccountModal: React.FC<AccountModalProps> = ({
         <div className="mt-6 space-y-3">
           <div className="p-3 bg-muted/20 rounded-lg space-y-2">
             <p className="font-hand text-sm text-foreground/80">
-              Your prompts and generated images are processed by cloud services in token mode.
+              Your prompts and generated images are processed by cloud services in credit mode.
             </p>
             {privacyPolicyUrl ? (
               <a

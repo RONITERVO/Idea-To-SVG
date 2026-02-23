@@ -1,6 +1,5 @@
 import { registerPlugin } from '@capacitor/core';
 import { isAndroid } from './platform';
-import { formatTokens } from './tokenManager';
 
 export interface Product {
   productId: string;
@@ -26,24 +25,24 @@ interface BillingPluginInterface {
 // Register the native plugin - will be available on Android, no-op on web
 const BillingPlugin = registerPlugin<BillingPluginInterface>('BillingPlugin');
 
-// Token amounts per product (must match backend/functions/src/index.ts)
-export const TOKEN_AMOUNTS: Record<string, { tokens: number; label: string }> = {
-  token_pack_tier1: { tokens: 100_000, label: 'Starter Pack' },
-  token_pack_tier2: { tokens: 500_000, label: 'Popular Pack' },
-  token_pack_tier3: { tokens: 2_000_000, label: 'Pro Pack' },
-  token_pack_tier4: { tokens: 10_000_000, label: 'Power Pack' },
+// GIF credit amounts per product (must match backend/functions/src/index.ts)
+export const GIF_CREDIT_PACKS: Record<string, { credits: number; label: string }> = {
+  token_pack_tier1: { credits: 2, label: 'Starter Pack' },
+  token_pack_tier2: { credits: 10, label: 'Popular Pack' },
+  token_pack_tier3: { credits: 40, label: 'Pro Pack' },
+  token_pack_tier4: { credits: 200, label: 'Power Pack' },
 };
 
-// Product IDs - derived from TOKEN_AMOUNTS so product metadata stays in sync.
-export const TOKEN_PRODUCT_IDS = Object.keys(TOKEN_AMOUNTS);
+// Product IDs - derived from GIF_CREDIT_PACKS so product metadata stays in sync.
+export const GIF_PRODUCT_IDS = Object.keys(GIF_CREDIT_PACKS);
 
 export const queryProducts = async (): Promise<Product[]> => {
   if (!isAndroid()) {
     // Return mock products for web development/testing
-    return TOKEN_PRODUCT_IDS.map(id => ({
+    return GIF_PRODUCT_IDS.map(id => ({
       productId: id,
-      title: TOKEN_AMOUNTS[id].label,
-      description: `${formatTokens(TOKEN_AMOUNTS[id].tokens)} tokens`,
+      title: GIF_CREDIT_PACKS[id].label,
+      description: `${GIF_CREDIT_PACKS[id].credits} GIF credits`,
       price: 'N/A',
       priceAmountMicros: 0,
       priceCurrencyCode: 'USD',
@@ -51,7 +50,7 @@ export const queryProducts = async (): Promise<Product[]> => {
   }
 
   try {
-    const result = await BillingPlugin.queryProducts({ productIds: TOKEN_PRODUCT_IDS });
+    const result = await BillingPlugin.queryProducts({ productIds: GIF_PRODUCT_IDS });
     return result.products;
   } catch (error) {
     console.error('Failed to query products:', error);

@@ -1,6 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import type { GenerateContentParameters } from "@google/genai";
-import { getApiKeyOrThrow, loadApiKey } from './apiKeyStorage';
+import { getApiKeyOrThrow } from './apiKeyStorage';
 import { isTokenMode } from './platform';
 import * as backendApi from './backendApi';
 import { updateLocalBalance } from './tokenManager';
@@ -13,14 +13,21 @@ export interface GeminiResult {
 export interface TokenEstimateResult {
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
-  estimatedTotal: number;
+  estimatedTotalTokens: number;
+  estimatedGifCredits: number;
+  estimatedRawGifCredits: number;
+  estimatedDisplayGifCredits: number;
+  billingDisplayWholeCredits: boolean;
+  billingRoundedToWholeCredits: boolean;
 }
 
 export type ThoughtCallback = (thoughtChunk: string) => void;
+export type OutputCallback = (outputChunk: string) => void;
 
 const streamWithThoughts = async (
   params: GenerateContentParameters,
-  onThought?: ThoughtCallback
+  onThought?: ThoughtCallback,
+  onOutput?: OutputCallback
 ): Promise<GeminiResult> => {
   const stream = await getAI().models.generateContentStream(params);
 
@@ -37,6 +44,7 @@ const streamWithThoughts = async (
         onThought?.(part.text);
       } else if (part.text) {
         accumulatedText += part.text;
+        onOutput?.(part.text);
       }
     }
   }
@@ -49,6 +57,23 @@ const streamWithThoughts = async (
 
 const MODEL_REASONING = 'gemini-3.1-pro-preview';
 const MODEL_VISION = 'gemini-3.1-pro-preview'; 
+
+const replayStreamedText = async (
+  text: string,
+  onChunk: ((chunk: string) => void) | undefined,
+  options?: { chunkSize?: number; delayMs?: number }
+): Promise<void> => {
+  if (!text || !onChunk) return;
+  const chunkSize = Math.max(32, Math.floor(options?.chunkSize ?? 320));
+  const delayMs = Math.max(0, Math.floor(options?.delayMs ?? 8));
+
+  for (let offset = 0; offset < text.length; offset += chunkSize) {
+    onChunk(text.slice(offset, offset + chunkSize));
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+};
 
 // Get API key from storage or use dev fallback in development only
 const getApiKey = (): string => {
@@ -182,10 +207,16 @@ const retryOperation = async <T>(operation: () => Promise<T>, retries = 3, delay
   }
 };
 
-export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (isTokenMode() && !loadApiKey()) {
-    const result = await retryOperation(() => backendApi.generateWithTokens('plan', { prompt: userPrompt }));
+export const planSVG = async (
+  userPrompt: string,
+  onThought?: ThoughtCallback,
+  sessionId?: string
+): Promise<GeminiResult> => {
+  if (isTokenMode()) {
+    if (!sessionId) throw new Error('Missing generation session.');
+    const result = await backendApi.generateWithTokens('plan', sessionId, { prompt: userPrompt });
     updateLocalBalance(result.remainingBalance);
+    await replayStreamedText(result.thoughts || '', onThought, { chunkSize: 220, delayMs: 8 });
     return { text: result.text, thoughts: result.thoughts };
   }
 
@@ -209,9 +240,23 @@ export const planSVG = async (userPrompt: string, onThought?: ThoughtCallback): 
   });
 };
 
-export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (isTokenMode() && !loadApiKey()) {
-    const result = await retryOperation(() => backendApi.generateWithTokens('generate', { plan }));
+export const generateInitialSVG = async (
+  plan: string,
+  onThought?: ThoughtCallback,
+  sessionId?: string,
+  onOutput?: OutputCallback
+): Promise<GeminiResult> => {
+  if (isTokenMode()) {
+    if (!sessionId) throw new Error('Missing generation session.');
+    const result = await backendApi.generateWithTokensStream(
+      'generate',
+      sessionId,
+      { plan },
+      {
+        onThoughtChunk: onThought,
+        onOutputChunk: onOutput,
+      }
+    );
     updateLocalBalance(result.remainingBalance);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   }
@@ -233,19 +278,27 @@ export const generateInitialSVG = async (plan: string, onThought?: ThoughtCallba
       config: {
         thinkingConfig: { includeThoughts: true },
       },
-    }, onThought);
+    }, onThought, onOutput);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   });
 };
 
-export const evaluateSVG = async (imageBase64: string, originalPrompt: string, iteration: number, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (isTokenMode() && !loadApiKey()) {
-    const result = await retryOperation(() => backendApi.generateWithTokens('evaluate', {
+export const evaluateSVG = async (
+  imageBase64: string,
+  originalPrompt: string,
+  iteration: number,
+  onThought?: ThoughtCallback,
+  sessionId?: string
+): Promise<GeminiResult> => {
+  if (isTokenMode()) {
+    if (!sessionId) throw new Error('Missing generation session.');
+    const result = await backendApi.generateWithTokens('evaluate', sessionId, {
       prompt: originalPrompt,
       imageBase64,
       iteration,
-    }));
+    });
     updateLocalBalance(result.remainingBalance);
+    await replayStreamedText(result.thoughts || '', onThought, { chunkSize: 220, delayMs: 8 });
     return { text: result.text, thoughts: result.thoughts };
   }
 
@@ -285,13 +338,29 @@ export const evaluateSVG = async (imageBase64: string, originalPrompt: string, i
   });
 };
 
-export const refineSVG = async (currentSvgCode: string, critique: string, originalPrompt: string, onThought?: ThoughtCallback): Promise<GeminiResult> => {
-  if (isTokenMode() && !loadApiKey()) {
-    const result = await retryOperation(() => backendApi.generateWithTokens('refine', {
-      prompt: originalPrompt,
-      svgCode: currentSvgCode,
-      critique,
-    }));
+export const refineSVG = async (
+  currentSvgCode: string,
+  critique: string,
+  originalPrompt: string,
+  onThought?: ThoughtCallback,
+  sessionId?: string,
+  onOutput?: OutputCallback
+): Promise<GeminiResult> => {
+  if (isTokenMode()) {
+    if (!sessionId) throw new Error('Missing generation session.');
+    const result = await backendApi.generateWithTokensStream(
+      'refine',
+      sessionId,
+      {
+        prompt: originalPrompt,
+        svgCode: currentSvgCode,
+        critique,
+      },
+      {
+        onThoughtChunk: onThought,
+        onOutputChunk: onOutput,
+      }
+    );
     updateLocalBalance(result.remainingBalance);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   }
@@ -321,31 +390,47 @@ export const refineSVG = async (currentSvgCode: string, critique: string, origin
       config: {
         thinkingConfig: { includeThoughts: true },
       },
-    }, onThought);
+    }, onThought, onOutput);
     return { text: cleanSVGCode(result.text), thoughts: result.thoughts };
   });
 };
 
-// ===== TOKEN ESTIMATION =====
+// ===== COST ESTIMATION =====
 
 export const estimateFullCycleCost = async (prompt: string): Promise<TokenEstimateResult> => {
-  if (isTokenMode() && !loadApiKey()) {
-    const PLAN_MULTIPLIER = 4; // plan + generate + evaluate + refine input-token scale.
-    const OUTPUT_GENERATE_TOKENS = 3_000; // Typical generate output token budget.
-    const OUTPUT_EVALUATE_TOKENS = 500; // Typical evaluate output token budget.
-    const OUTPUT_REFINE_TOKENS = 3_000; // Typical refine output token budget.
-    const TOTAL_OVERHEAD = OUTPUT_GENERATE_TOKENS + OUTPUT_EVALUATE_TOKENS + OUTPUT_REFINE_TOKENS;
-
-    // Estimate for a full cycle: plan + generate + evaluate + refine
+  if (isTokenMode()) {
     const planEstimate = await backendApi.estimateTokenCost('plan', { prompt });
-    // Plan estimate plus additional stages, using named constants for maintainability.
+    const estimatedInputTokens = Math.max(
+      0,
+      Math.ceil(planEstimate.estimatedPairInputTokens ?? planEstimate.estimatedInputTokens ?? 0)
+    );
+    const estimatedOutputTokens = Math.max(
+      0,
+      Math.ceil(planEstimate.estimatedPairOutputTokens ?? planEstimate.estimatedOutputTokens ?? 0)
+    );
+    const estimatedTotalTokens = Math.max(
+      0,
+      Math.ceil(planEstimate.estimatedPairTotal ?? (estimatedInputTokens + estimatedOutputTokens))
+    );
+    const estimatedGifCredits = Math.max(0, Number(planEstimate.estimatedGifCredits ?? 0));
+    const estimatedRawGifCredits = Math.max(
+      0,
+      Number(planEstimate.estimatedRawGifCredits ?? estimatedGifCredits)
+    );
+    const estimatedDisplayGifCredits = Math.max(
+      1,
+      Math.ceil(Number(planEstimate.estimatedDisplayGifCredits ?? estimatedGifCredits))
+    );
+
     return {
-      estimatedInputTokens: planEstimate.estimatedInputTokens * PLAN_MULTIPLIER,
-      estimatedOutputTokens: planEstimate.estimatedOutputTokens + TOTAL_OVERHEAD,
-      estimatedTotal:
-        planEstimate.estimatedTotal +
-        TOTAL_OVERHEAD +
-        (planEstimate.estimatedInputTokens * (PLAN_MULTIPLIER - 1)),
+      estimatedInputTokens,
+      estimatedOutputTokens,
+      estimatedTotalTokens,
+      estimatedGifCredits,
+      estimatedRawGifCredits,
+      estimatedDisplayGifCredits,
+      billingDisplayWholeCredits: planEstimate.billingDisplayWholeCredits ?? true,
+      billingRoundedToWholeCredits: planEstimate.billingRoundedToWholeCredits ?? false,
     };
   }
 
@@ -357,19 +442,32 @@ export const estimateFullCycleCost = async (prompt: string): Promise<TokenEstima
       contents: `Plan SVG for: "${prompt}"`,
     });
     const inputTokens = countResult.totalTokens || 0;
-    const estimatedTotal = (inputTokens * 4) + 7500; // rough full cycle
+    const estimatedOutputTokens = 7500;
+    const estimatedTotalTokens = (inputTokens * 4) + estimatedOutputTokens;
     return {
       estimatedInputTokens: inputTokens * 4,
-      estimatedOutputTokens: 7500,
-      estimatedTotal,
+      estimatedOutputTokens,
+      estimatedTotalTokens,
+      estimatedGifCredits: 0,
+      estimatedRawGifCredits: 0,
+      estimatedDisplayGifCredits: 0,
+      billingDisplayWholeCredits: false,
+      billingRoundedToWholeCredits: false,
     };
   } catch {
     // Fallback estimate based on prompt length
     const roughTokens = Math.ceil(prompt.length / 4);
+    const estimatedInputTokens = roughTokens * 4 + 2000;
+    const estimatedOutputTokens = 7500;
     return {
-      estimatedInputTokens: roughTokens * 4 + 2000,
-      estimatedOutputTokens: 7500,
-      estimatedTotal: roughTokens * 4 + 9500,
+      estimatedInputTokens,
+      estimatedOutputTokens,
+      estimatedTotalTokens: estimatedInputTokens + estimatedOutputTokens,
+      estimatedGifCredits: 0,
+      estimatedRawGifCredits: 0,
+      estimatedDisplayGifCredits: 0,
+      billingDisplayWholeCredits: false,
+      billingRoundedToWholeCredits: false,
     };
   }
 };

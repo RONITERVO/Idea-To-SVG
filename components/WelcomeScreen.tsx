@@ -72,7 +72,7 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
           Generate stunning SVG graphics powered by AI. Choose how you'd like to get started.
         </p>
 
-        {/* Token Mode - Primary */}
+        {/* Cloud Credit Mode - Primary */}
         <button
           onClick={handleTokenMode}
           disabled={isSigningIn}
@@ -83,10 +83,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
           </div>
           <div className="flex-1">
             <h3 className="font-sketch text-xl text-foreground">
-              {isSigningIn ? 'Signing in...' : 'Get Started with Tokens'}
+              {isSigningIn ? 'Signing in...' : 'Get Started with GIF Credits'}
             </h3>
             <p className="font-hand text-sm text-muted-foreground mt-1">
-              Sign in with Google and purchase token packs. Prompts are processed in cloud services.
+              Sign in with Google and purchase GIF credit packs. Charges settle from actual token usage and are shown as whole-number estimates per generation.
             </p>
           </div>
           {isSigningIn ? (
@@ -95,6 +95,10 @@ const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onComplete }) => {
             <LogIn size={20} className="text-muted-foreground flex-shrink-0" />
           )}
         </button>
+
+        <p className="font-hand text-xs text-muted-foreground mb-4">
+          Example: a stickman prompt is usually cheaper than a highly detailed action scene, while complex outputs trend higher in credits.
+        </p>
 
         {/* API Key Mode - Secondary */}
         <button

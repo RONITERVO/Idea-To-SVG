@@ -9,13 +9,17 @@ interface ActiveStageProps {
   setPrompt: (s: string) => void;
   onStart: () => void;
   onStop: () => void;
+  autoRefineEnabled: boolean;
+  onAutoRefineChange: (enabled: boolean) => void;
+  stopAfterCurrentResult: boolean;
   svgCode: string;
   canvasRef: React.RefObject<SVGCanvasHandle | null>;
   critique: string | null;
-    thoughts: string[];
+  thoughts: string[];
   isThinking?: boolean;
   plan: string | null;
   iteration: number;
+  streamedSvgCode: string;
 }
 
 const ActiveStage: React.FC<ActiveStageProps> = ({
@@ -24,13 +28,17 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
   setPrompt,
   onStart,
   onStop,
+  autoRefineEnabled,
+  onAutoRefineChange,
+  stopAfterCurrentResult,
   svgCode,
   canvasRef,
   critique,
   thoughts,
   isThinking,
   plan,
-  iteration
+  iteration,
+  streamedSvgCode
 }) => {
   const isIdle = phase === AppPhase.IDLE || phase === AppPhase.STOPPED;
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -40,7 +48,7 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
     if (terminalRef.current) {
         terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
-    }, [critique, plan, phase, iteration]);
+    }, [critique, plan, phase, iteration, streamedSvgCode]);
 
     const statusText =
         phase === AppPhase.GENERATING
@@ -121,15 +129,32 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
                         </span>
                     </button>
                 ) : (
-                    <button
-                        onClick={onStop}
-                        className="group relative px-8 py-3 font-sketch text-2xl sketchy-border cursor-pointer transition-all duration-300 bg-white text-destructive border-destructive hover:bg-destructive/5 hover:shadow-lg hover:rotate-1"
-                    >
-                        <span className="flex items-center gap-2">
-                            <Eraser size={20} className="group-hover:wobble" />
-                            Stop Drawing
-                        </span>
-                    </button>
+                    <div className="flex flex-col items-center gap-2">
+                        <div className="flex flex-wrap items-center justify-center gap-3">
+                            <button
+                                onClick={onStop}
+                                className="group relative px-6 py-3 font-sketch text-xl sketchy-border cursor-pointer transition-all duration-300 bg-white text-destructive border-destructive hover:bg-destructive/5 hover:shadow-lg hover:rotate-1"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <Eraser size={20} className="group-hover:wobble" />
+                                    Stop Now
+                                </span>
+                            </button>
+                            <label className="flex items-center gap-2 px-3 py-2 sketchy-border-thin bg-card font-hand text-sm">
+                                <input
+                                    type="checkbox"
+                                    checked={autoRefineEnabled}
+                                    onChange={(e) => onAutoRefineChange(e.target.checked)}
+                                />
+                                Auto refinement loop
+                            </label>
+                        </div>
+                        {stopAfterCurrentResult && (
+                            <div className="font-hand text-xs text-muted-foreground">
+                                Auto loop disabled. This run will stop after the current result finishes.
+                            </div>
+                        )}
+                    </div>
                 )}
             </div>
         </div>
@@ -183,6 +208,14 @@ const ActiveStage: React.FC<ActiveStageProps> = ({
                             )}
                             {isThinking && thoughts.length === 0 && (
                                 <div className="mt-1 not-italic text-foreground/50 text-base">Thinking...</div>
+                            )}
+                            {(phase === AppPhase.GENERATING || phase === AppPhase.REFINING) && streamedSvgCode && (
+                                <div className="mt-3 not-italic">
+                                    <div className="text-accent/80 font-bold mb-1">SVG stream:</div>
+                                    <pre className="max-h-48 overflow-y-auto bg-background/60 border border-border/50 rounded p-2 text-xs leading-snug whitespace-pre-wrap break-all text-foreground/80">
+                                        {streamedSvgCode}
+                                    </pre>
+                                </div>
                             )}
                         </div>
                     )}

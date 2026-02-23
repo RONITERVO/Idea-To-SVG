@@ -1,149 +1,224 @@
-import React, { useState } from 'react';
-import { X, Key, AlertCircle, ArrowLeft } from 'lucide-react';
-import { setApiKey, ApiKeyError, loadApiKey } from '../services/apiKeyStorage';
+import React, { useEffect, useState } from 'react';
+import { X, Key, Coins, LogIn, LogOut, AlertCircle, UserCircle2 } from 'lucide-react';
+import { setApiKey, ApiKeyError } from '../services/apiKeyStorage';
 
 interface ApiKeyModalProps {
   isOpen: boolean;
   onClose: () => void;
   onKeySaved: () => void;
-  onBack?: () => void;
+  hasApiKey: boolean;
+  isTokenMode: boolean;
+  isAuthenticated: boolean;
+  isSigningIn: boolean;
+  onModeChange: (mode: 'tokens' | 'apikey') => void;
+  onOpenPurchase: () => void;
+  onSignIn: () => Promise<void>;
+  onSignOut: () => Promise<void>;
+  onOpenAccount: () => void;
 }
 
-const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onKeySaved, onBack }) => {
+const ApiKeyModal: React.FC<ApiKeyModalProps> = ({
+  isOpen,
+  onClose,
+  onKeySaved,
+  hasApiKey,
+  isTokenMode,
+  isAuthenticated,
+  isSigningIn,
+  onModeChange,
+  onOpenPurchase,
+  onSignIn,
+  onSignOut,
+  onOpenAccount,
+}) => {
   const [keyInput, setKeyInput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setError(null);
+      setKeyInput('');
+      setIsSavingKey(false);
+      setIsSigningOut(false);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = async () => {
+  const handleSaveKey = async () => {
     setError(null);
-    setIsSubmitting(true);
-
+    setIsSavingKey(true);
     try {
       await setApiKey(keyInput);
-      setKeyInput('');
       onKeySaved();
+      setKeyInput('');
       onClose();
     } catch (e) {
       if (e instanceof ApiKeyError) {
         setError(e.message);
       } else {
-        setError('An unexpected error occurred. Please try again.');
+        setError('Failed to save API key.');
       }
     } finally {
-      setIsSubmitting(false);
+      setIsSavingKey(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && keyInput.trim()) {
-      handleSave();
+  const handleSignIn = async () => {
+    setError(null);
+    try {
+      await onSignIn();
+    } catch (e: any) {
+      setError(e?.message || 'Sign in failed.');
+    }
+  };
+
+  const handleSignOut = async () => {
+    setError(null);
+    setIsSigningOut(true);
+    try {
+      await onSignOut();
+    } catch (e: any) {
+      setError(e?.message || 'Sign out failed.');
+    } finally {
+      setIsSigningOut(false);
     }
   };
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-fade-in" 
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          const hasKey = loadApiKey();
-          if (hasKey) onClose();
-          else if (onBack) onBack();
-        }
-      }}
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-background/60 backdrop-blur-sm animate-fade-in"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-modal-title"
     >
-      <div 
-        className="bg-card sketchy-border w-full max-w-lg p-8 relative shadow-2xl animate-sketch-in" 
-        onClick={e => e.stopPropagation()}
+      <div
+        className="bg-card sketchy-border w-full max-w-lg p-6 relative shadow-2xl animate-sketch-in mt-4"
+        onClick={(e) => e.stopPropagation()}
       >
-        {/* Close Button - only show if user already has a key set */}
-        {loadApiKey() && (
-          <button
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 bg-muted/20 hover:bg-muted/50 rounded-full transition-colors text-foreground"
-            aria-label="Close"
-          >
-            <X size={20} />
-          </button>
-        )}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 bg-muted/20 hover:bg-muted/50 rounded-full transition-colors text-foreground"
+          aria-label="Close"
+        >
+          <X size={20} />
+        </button>
 
-        {/* Back Button - show during initial setup when user can go back to welcome */}
-        {!loadApiKey() && onBack && (
-          <button
-            onClick={onBack}
-            className="absolute top-4 left-4 p-2 bg-muted/20 hover:bg-muted/50 rounded-full transition-colors text-foreground"
-            aria-label="Go back"
-          >
-            <ArrowLeft size={20} />
-          </button>
-        )}
-
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-5">
           <div className="p-2 bg-accent/10 rounded-lg">
-            <Key className="text-accent" size={28} />
+            <Key className="text-accent" size={24} />
           </div>
-          <h2 className="font-sketch text-3xl text-foreground">API Key Required</h2>
+          <h2 id="settings-modal-title" className="font-sketch text-3xl text-foreground">Settings</h2>
         </div>
 
-        <div className="space-y-4 mb-6">
-          <p className="font-hand text-lg text-foreground/80">
-            This app uses Google's Gemini API to generate SVG graphics. 
-            You'll need your own API key to continue.
-          </p>
-          
-          <div className="bg-accent/5 border border-accent/20 rounded-lg p-4">
-            <p className="font-hand text-base text-foreground/70 mb-2">
-              <strong>How to get your key:</strong>
-            </p>
-            <ol className="font-hand text-sm text-foreground/70 space-y-1 list-decimal list-inside">
-              <li>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-accent underline hover:text-accent/80">Get key here</a></li>
-              <li>Sign in with your Google account</li>
-              <li>Create or select a project</li>
-              <li>Generate an API key</li>
-            </ol>
+        <div className="mb-5">
+          <p className="font-hand text-sm text-muted-foreground mb-2">Generation mode</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onModeChange('tokens')}
+              className={`py-2.5 sketchy-border-thin font-hand text-sm transition-all ${
+                isTokenMode ? 'bg-accent text-white' : 'hover:bg-muted/30'
+              }`}
+            >
+              Cloud Credits
+            </button>
+            <button
+              onClick={() => onModeChange('apikey')}
+              className={`py-2.5 sketchy-border-thin font-hand text-sm transition-all ${
+                !isTokenMode ? 'bg-accent text-white' : 'hover:bg-muted/30'
+              }`}
+            >
+              API Key
+            </button>
           </div>
+        </div>
 
-          <div>
-            <label htmlFor="api-key-input" className="font-hand text-base text-foreground/80 mb-2 block">
-              Enter your Gemini API Key:
-            </label>
+        {isTokenMode ? (
+          <div className="space-y-3">
+            {!isAuthenticated ? (
+              <>
+                <p className="font-hand text-sm text-foreground/80">
+                  Sign in with Google to use paid cloud generation and buy GIF credits. Billing settles from actual token usage with fractional precision.
+                </p>
+                <button
+                  onClick={handleSignIn}
+                  disabled={isSigningIn}
+                  className="w-full py-2.5 sketchy-border-thin font-hand text-base bg-accent text-white hover:bg-accent/90 disabled:bg-muted disabled:text-muted-foreground transition-all flex items-center justify-center gap-2"
+                >
+                  <LogIn size={16} />
+                  {isSigningIn ? 'Signing in...' : 'Sign in with Google'}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="font-hand text-xs text-muted-foreground">
+                  Per-generation previews show whole-number credits, while the ledger and balance use fractional credits.
+                </p>
+                <button
+                  onClick={onOpenPurchase}
+                  className="w-full py-2.5 sketchy-border-thin font-hand text-base bg-accent text-white hover:bg-accent/90 transition-all flex items-center justify-center gap-2"
+                >
+                  <Coins size={16} />
+                  Buy GIF Credits
+                </button>
+                <button
+                  onClick={onOpenAccount}
+                  className="w-full py-2.5 sketchy-border-thin font-hand text-base hover:bg-muted/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <UserCircle2 size={16} />
+                  Manage Account
+                </button>
+                <button
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="w-full py-2.5 sketchy-border-thin font-hand text-base hover:bg-muted/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogOut size={16} />
+                  {isSigningOut ? 'Signing out...' : 'Sign out'}
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="font-hand text-sm text-foreground/80">
+              Use your own Gemini API key to generate without consuming GIF credits.
+            </p>
             <input
-              id="api-key-input"
               type="password"
               value={keyInput}
               onChange={(e) => {
                 setKeyInput(e.target.value);
                 setError(null);
               }}
-              onKeyDown={handleKeyDown}
-              placeholder="AIza..."
-              className="w-full px-4 py-3 font-hand text-lg bg-background border-2 border-border rounded-lg focus:border-accent focus:outline-none transition-colors"
+              placeholder={hasApiKey ? 'API key saved. Enter new key to replace.' : 'AIza...'}
+              className="w-full px-3 py-2 font-hand text-base bg-background border border-border rounded focus:border-accent focus:outline-none"
               autoFocus
             />
+            <button
+              onClick={handleSaveKey}
+              disabled={!keyInput.trim() || isSavingKey}
+              className="w-full py-2.5 sketchy-border-thin font-hand text-base bg-accent text-white hover:bg-accent/90 disabled:bg-muted disabled:text-muted-foreground transition-all"
+            >
+              {isSavingKey ? 'Saving...' : hasApiKey ? 'Replace API Key' : 'Save API Key'}
+            </button>
+            {hasApiKey && (
+              <p className="font-hand text-xs text-muted-foreground">
+                An API key is already saved on this device.
+              </p>
+            )}
           </div>
+        )}
 
-          {error && (
-            <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3">
-              <AlertCircle className="text-destructive mt-0.5" size={18} />
-              <p className="font-hand text-sm text-destructive/90">{error}</p>
-            </div>
-          )}
-        </div>
-
-        <div className="flex gap-3">
-          <button
-            onClick={handleSave}
-            disabled={!keyInput.trim() || isSubmitting}
-            className="flex-1 py-3 sketchy-border-thin font-sketch text-xl bg-accent text-white hover:bg-accent/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed transition-all"
-          >
-            {isSubmitting ? 'Saving...' : 'Save Key'}
-          </button>
-        </div>
-
-        <p className="font-hand text-xs text-muted-foreground mt-4 text-center">
-          Your API key is stored securely on your device and never sent to this app backend.
-        </p>
+        {error && (
+          <div className="mt-4 flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg p-3">
+            <AlertCircle className="text-destructive mt-0.5" size={18} />
+            <p className="font-hand text-sm text-destructive/90">{error}</p>
+          </div>
+        )}
       </div>
     </div>
   );
