@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+.cache/
+
+# Android release artifacts
+android/keystore.properties
+android/local.properties
+android/*.jks
+android/app/build/
+android/.gradle/
+
+# Firebase backend
+backend/functions/node_modules/
+backend/functions/lib/
+backend/functions/.env
+backend/functions/service-account.json
+
+# Firebase / Google services config (contains project secrets)
+android/app/google-services.json

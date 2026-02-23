@@ -1,0 +1,795 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
+import { AppPhase, GenerationState, SVGVersion } from './types';
+import * as db from './services/db';
+import * as gemini from './services/gemini';
+import { loadApiKey, initApiKey, ApiKeyError } from './services/apiKeyStorage';
+import { isTokenMode as checkTokenMode, setAppMode } from './services/platform';
+import {
+  onAuthStateChanged,
+  getCurrentUser,
+  signOut,
+  signInWithGoogle,
+  AuthRedirectInProgressError,
+  completePendingRedirectSignIn,
+} from './services/auth';
+import { refreshBalance, subscribeToBalance } from './services/tokenManager';
+import { getPendingPurchases } from './services/billing';
+import { verifyPurchase, deleteMyAccount } from './services/backendApi';
+import { PRIVACY_POLICY_URL, SUPPORT_EMAIL } from './services/appConfig';
+import { sanitizeSvg } from './services/svgSanitizer';
+import { SVGCanvasHandle } from './components/SVGCanvas';
+import type { TokenEstimateResult } from './services/gemini';
+
+import Header from './components/Header';
+import ActiveStage from './components/ActiveStage';
+import Gallery from './components/Gallery';
+import Modal from './components/Modal';
+import ManualEntry from './components/ManualEntry';
+import SketchSvgFilters from './components/SketchSvgFilters';
+import ApiKeyModal from './components/ApiKeyModal';
+import TokenEstimate from './components/TokenEstimate';
+import TokenPurchase from './components/TokenPurchase';
+import AccountModal from './components/AccountModal';
+
+const App: React.FC = () => {
+  const [prompt, setPrompt] = useState('');
+  const [state, setState] = useState<GenerationState>({
+    phase: AppPhase.IDLE,
+    currentIteration: 0,
+    lastCritique: null,
+    lastThoughts: [],
+    plan: null,
+    error: null,
+  });
+
+  const [versions, setVersions] = useState<SVGVersion[]>([]);
+  const [currentSVG, setCurrentSVG] = useState<string>('');
+  const [viewingVersion, setViewingVersion] = useState<SVGVersion | null>(null);
+
+  // API Key State
+  const [hasApiKey, setHasApiKey] = useState<boolean>(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+
+  // Token Mode State
+  const [isTokenMode, setIsTokenMode] = useState<boolean>(false);
+  const [tokenBalance, setTokenBalance] = useState<number>(0);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState<boolean>(false);
+  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
+
+  // Token Estimation State
+  const [tokenEstimate, setTokenEstimate] = useState<TokenEstimateResult | null>(null);
+  const [isEstimating, setIsEstimating] = useState<boolean>(false);
+  const [showEstimate, setShowEstimate] = useState<boolean>(false);
+  const [autoRefineEnabled, setAutoRefineEnabled] = useState<boolean>(false);
+  const [stopAfterCurrentResult, setStopAfterCurrentResult] = useState<boolean>(false);
+  const [streamedSvgCode, setStreamedSvgCode] = useState<string>('');
+
+  // Selection State
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Refs for Loop Control (to avoid stale closures in setTimeout)
+  const isLoopingRef = useRef(false);
+  const canvasRef = useRef<SVGCanvasHandle>(null);
+  const latestSVGRef = useRef<string>('');
+  const promptRef = useRef<string>('');
+  const currentVersionIdRef = useRef<string>('');
+  const generationSessionIdRef = useRef<string>('');
+  const iterationRef = useRef(0);
+  const phaseRef = useRef<AppPhase>(AppPhase.IDLE);
+  const pendingRecoveryForUidRef = useRef<string | null>(null);
+  const autoRefineEnabledRef = useRef<boolean>(false);
+  const stopAfterCurrentRef = useRef<boolean>(false);
+  const streamedSvgBufferRef = useRef<string>('');
+  const streamedSvgFlushPendingRef = useRef<boolean>(false);
+
+  const reconcilePendingPurchases = useCallback(async (uid: string) => {
+    if (pendingRecoveryForUidRef.current === uid) return;
+    pendingRecoveryForUidRef.current = uid;
+    let succeeded = false;
+
+    try {
+      const pending = await getPendingPurchases();
+      if (pending.length === 0) return;
+
+      for (const purchase of pending) {
+        try {
+          await verifyPurchase(purchase.purchaseToken, purchase.productId);
+        } catch (error) {
+          console.error('Pending purchase reconciliation failed for one item:', error);
+        }
+      }
+
+      await refreshBalance().then(setTokenBalance);
+      succeeded = true;
+    } catch (error) {
+      console.error('Failed to reconcile pending purchases:', error);
+    } finally {
+      if (!succeeded && pendingRecoveryForUidRef.current === uid) {
+        pendingRecoveryForUidRef.current = null;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    autoRefineEnabledRef.current = autoRefineEnabled;
+  }, [autoRefineEnabled]);
+
+  useEffect(() => {
+    stopAfterCurrentRef.current = stopAfterCurrentResult;
+  }, [stopAfterCurrentResult]);
+
+  useEffect(() => {
+    const initialize = async () => {
+      try {
+        const saved = await db.getAllVersions();
+        setVersions(saved);
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+
+      // Completes Google redirect sign-in flows on Android/web if one is pending.
+      const redirectUser = await completePendingRedirectSignIn().catch((e) => {
+        console.error('Redirect sign-in completion failed:', e);
+        return null;
+      });
+
+      // Initialize API key from SecureStorage (async on native)
+      await initApiKey();
+
+      // Now loadApiKey() returns the cached key
+      const apiKey = loadApiKey();
+      setHasApiKey(!!apiKey);
+      const tokenMode = checkTokenMode();
+      setIsTokenMode(tokenMode);
+      const currentUser = redirectUser || getCurrentUser();
+
+      if ((!apiKey && !tokenMode) || (tokenMode && !currentUser)) {
+        setIsApiKeyModalOpen(true);
+      }
+    };
+
+    initialize();
+
+    // Auth & balance listeners (synchronous setup, independent of init)
+    const unsubAuth = onAuthStateChanged((user) => {
+      setIsAuthenticated(!!user);
+      if (user && checkTokenMode()) {
+        refreshBalance().then(setTokenBalance).catch(console.error);
+        reconcilePendingPurchases(user.uid).catch(console.error);
+      } else if (!user) {
+        pendingRecoveryForUidRef.current = null;
+      }
+    });
+
+    const unsubBalance = subscribeToBalance(setTokenBalance);
+
+    return () => {
+      unsubAuth();
+      unsubBalance();
+    };
+  }, [reconcilePendingPurchases]);
+
+  // Sync viewingVersion with versions list (allows live updates in modal)
+  useEffect(() => {
+    if (viewingVersion) {
+        const updated = versions.find(v => v.id === viewingVersion.id);
+        if (updated && updated.critique !== viewingVersion.critique) {
+            setViewingVersion(updated);
+        }
+    }
+  }, [versions, viewingVersion]);
+
+  const updatePhase = (phase: AppPhase, extra?: Partial<GenerationState>) => {
+    phaseRef.current = phase;
+    setState(prev => ({ ...prev, phase, ...extra }));
+  };
+
+  const resetStreamedSvgPreview = useCallback(() => {
+    streamedSvgBufferRef.current = '';
+    streamedSvgFlushPendingRef.current = false;
+    setStreamedSvgCode('');
+  }, []);
+
+  const appendStreamedSvgChunk = useCallback((chunk: string) => {
+    if (!chunk) return;
+    streamedSvgBufferRef.current += chunk;
+    if (streamedSvgFlushPendingRef.current) return;
+    streamedSvgFlushPendingRef.current = true;
+    requestAnimationFrame(() => {
+      streamedSvgFlushPendingRef.current = false;
+      setStreamedSvgCode(streamedSvgBufferRef.current);
+    });
+  }, []);
+
+  const stopLoop = useCallback(() => {
+    isLoopingRef.current = false;
+    phaseRef.current = AppPhase.STOPPED;
+    updatePhase(AppPhase.STOPPED);
+    stopAfterCurrentRef.current = false;
+    setStopAfterCurrentResult(false);
+  }, [updatePhase]);
+
+  const handleAutoRefineToggle = useCallback((enabled: boolean) => {
+    setAutoRefineEnabled(enabled);
+    autoRefineEnabledRef.current = enabled;
+
+    if (!enabled && isLoopingRef.current) {
+      // Finish the in-flight generation step, then stop on the next completed result.
+      stopAfterCurrentRef.current = true;
+      setStopAfterCurrentResult(true);
+    } else if (enabled) {
+      stopAfterCurrentRef.current = false;
+      setStopAfterCurrentResult(false);
+    }
+  }, []);
+
+  const saveToHistory = async (id: string, svgCode: string, critique: string | undefined, iteration: number, thumbnail: string) => {
+      const safeSvgCode = sanitizeSvg(svgCode);
+      const newVersion: SVGVersion = {
+          id: id,
+          timestamp: Date.now(),
+          svgCode: safeSvgCode,
+          critique,
+          iteration,
+          prompt: promptRef.current,
+          thumbnail
+      };
+
+      await db.saveVersion(newVersion);
+
+      setVersions(prev => {
+          // Check if this ID already exists (update it), otherwise add new
+          const index = prev.findIndex(v => v.id === id);
+          if (index >= 0) {
+              const copy = [...prev];
+              copy[index] = newVersion;
+              return copy;
+          }
+          return [newVersion, ...prev];
+      });
+  };
+
+  const handleManualAdd = async (code: string) => {
+    const safeCode = sanitizeSvg(code);
+    const newVersion: SVGVersion = {
+        id: uuidv4(),
+        timestamp: Date.now(),
+        svgCode: safeCode,
+        critique: "Manually added via input.",
+        iteration: versions.length + 1,
+        prompt: "Manual Entry",
+        thumbnail: undefined
+    };
+    await db.saveVersion(newVersion);
+    setVersions(prev => [newVersion, ...prev]);
+  };
+
+  const toggleSelect = (id: string) => {
+      setSelectedIds(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+      });
+  };
+
+  const deleteVersions = async (ids: string[]) => {
+      for (const id of ids) {
+          await db.deleteVersion(id);
+      }
+      setVersions(prev => prev.filter(v => !ids.includes(v.id)));
+      setSelectedIds(new Set()); // Clear selection
+      if (viewingVersion && ids.includes(viewingVersion.id)) {
+          setViewingVersion(null);
+      }
+  };
+
+  const runRefinementLoop = async () => {
+      if (!isLoopingRef.current) return;
+
+      const handleThought = (thoughtChunk: string) => {
+        const normalized = thoughtChunk.trim();
+        if (!normalized) return;
+
+        setState(prev => {
+          if (prev.lastThoughts[0] === normalized) return prev;
+          return { ...prev, lastThoughts: [normalized, ...prev.lastThoughts].slice(0, 2) };
+        });
+      };
+
+      try {
+          // --- INITIALIZATION PHASE ---
+          // Use refs to check state to avoid stale closure issues
+          if (!latestSVGRef.current) {
+              resetStreamedSvgPreview();
+              updatePhase(AppPhase.PLANNING, { error: null, lastThoughts: [] });
+              const planResult = await gemini.planSVG(
+                promptRef.current,
+                handleThought,
+                generationSessionIdRef.current
+              );
+
+              if(!isLoopingRef.current) return;
+              resetStreamedSvgPreview();
+              updatePhase(AppPhase.GENERATING, { lastThoughts: [] });
+              const svgResult = await gemini.generateInitialSVG(
+                planResult.text,
+                handleThought,
+                generationSessionIdRef.current,
+                appendStreamedSvgChunk
+              );
+              const safeInitialSvg = sanitizeSvg(svgResult.text);
+
+              latestSVGRef.current = safeInitialSvg;
+              setCurrentSVG(safeInitialSvg);
+              // Generate the ID for the first iteration (Iteration 1)
+              currentVersionIdRef.current = uuidv4();
+
+              iterationRef.current = 1;
+              setState(prev => ({...prev, currentIteration: 1, plan: planResult.text }));
+
+              if (!autoRefineEnabledRef.current || stopAfterCurrentRef.current) {
+                stopAfterCurrentRef.current = false;
+                setStopAfterCurrentResult(false);
+                stopLoop();
+                return;
+              }
+
+              setTimeout(runRefinementLoop, 1500);
+              return;
+          }
+
+          // --- REFINEMENT LOOP ---
+
+          // 1. RENDER
+          updatePhase(AppPhase.RENDERING, { error: null, lastThoughts: [] });
+          // Short delay to ensure DOM is ready before capture
+          await new Promise(r => setTimeout(r, 200));
+          const imageBase64 = await canvasRef.current?.captureImage();
+
+          if (!imageBase64) {
+              console.warn("Capture failed, retrying...");
+              setTimeout(runRefinementLoop, 1000);
+              return;
+          }
+
+          // 1b. SAVE (FAST) - Add to gallery immediately without critique
+          await saveToHistory(
+              currentVersionIdRef.current,
+              latestSVGRef.current,
+              undefined,
+              iterationRef.current,
+              imageBase64
+          );
+
+          // 2. EVALUATE
+          if(!isLoopingRef.current) return;
+          updatePhase(AppPhase.EVALUATING, { lastThoughts: [] });
+          const critiqueResult = await gemini.evaluateSVG(
+            imageBase64,
+            promptRef.current,
+            iterationRef.current,
+            handleThought,
+            generationSessionIdRef.current
+          );
+
+          setState(prev => ({...prev, lastCritique: critiqueResult.text}));
+
+          // 2b. SAVE (UPDATE) - Update gallery item with critique
+          await saveToHistory(
+              currentVersionIdRef.current,
+              latestSVGRef.current,
+              critiqueResult.text,
+              iterationRef.current,
+              imageBase64
+          );
+
+          // 3. REFINE
+          if(!isLoopingRef.current) return;
+          resetStreamedSvgPreview();
+          updatePhase(AppPhase.REFINING, { lastThoughts: [] });
+          const refineResult = await gemini.refineSVG(
+            latestSVGRef.current,
+            critiqueResult.text,
+            promptRef.current,
+            handleThought,
+            generationSessionIdRef.current,
+            appendStreamedSvgChunk
+          );
+          const safeRefinedSvg = sanitizeSvg(refineResult.text);
+
+          latestSVGRef.current = safeRefinedSvg;
+          setCurrentSVG(safeRefinedSvg);
+
+          // Prepare for NEXT iteration
+          currentVersionIdRef.current = uuidv4();
+          iterationRef.current += 1;
+          setState(prev => ({...prev, currentIteration: prev.currentIteration + 1}));
+
+          if (!autoRefineEnabledRef.current || stopAfterCurrentRef.current) {
+            stopAfterCurrentRef.current = false;
+            setStopAfterCurrentResult(false);
+            stopLoop();
+            return;
+          }
+
+          // 4. REPEAT
+          setTimeout(runRefinementLoop, 2000);
+
+      } catch (e: any) {
+          console.error("Loop Error", e);
+
+          // Check if it's an API key error
+          if (e instanceof ApiKeyError) {
+              stopLoop();
+              setIsApiKeyModalOpen(true);
+              updatePhase(AppPhase.STOPPED, { error: e.message });
+              return;
+          }
+
+          // Check for insufficient GIF credits
+          const errorMessage = String(e?.message || '');
+          const isInsufficientCredits =
+            e?.code === 'functions/resource-exhausted' ||
+            /insufficient gif credits/i.test(errorMessage);
+
+          if (isInsufficientCredits) {
+              stopLoop();
+              setIsPurchaseModalOpen(true);
+              updatePhase(AppPhase.STOPPED, { error: 'Insufficient GIF credits. Charges are settled with fractional precision and can exceed the shown whole-number estimate.' });
+              return;
+          }
+
+          if (e?.code === 'functions/failed-precondition') {
+              stopLoop();
+              updatePhase(AppPhase.STOPPED, { error: e?.message || 'Generation state became invalid. Start a new run.' });
+              return;
+          }
+
+          if (isLoopingRef.current) {
+             stopLoop();
+             updatePhase(AppPhase.STOPPED, { error: `Generation stopped: ${e.message || 'Unknown error'}. Start again to continue.` });
+          } else {
+             updatePhase(AppPhase.STOPPED, { error: e.message });
+          }
+      }
+  };
+
+  const requestStartLoop = async () => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    // In API-key mode, key is required. In credit mode, sign-in is required.
+    const apiKey = loadApiKey();
+    if (!isTokenMode && !apiKey) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+
+    if (isTokenMode && !isAuthenticated) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+
+    // Show generation estimate and auto-run toggle before starting.
+    setShowEstimate(true);
+    setIsEstimating(true);
+    setTokenEstimate(null);
+    setAutoRefineEnabled(false);
+    autoRefineEnabledRef.current = false;
+    setStopAfterCurrentResult(false);
+    stopAfterCurrentRef.current = false;
+    resetStreamedSvgPreview();
+
+    try {
+      const estimate = await gemini.estimateFullCycleCost(trimmed);
+      setTokenEstimate(estimate);
+    } catch (err) {
+      console.error('Failed to estimate tokens:', err);
+      // Still allow starting even if estimation fails
+      setTokenEstimate({
+        estimatedInputTokens: 0,
+        estimatedOutputTokens: 0,
+        estimatedTotalTokens: 0,
+        estimatedGifCredits: 1,
+        estimatedRawGifCredits: 1,
+        estimatedDisplayGifCredits: 1,
+        billingDisplayWholeCredits: true,
+        billingRoundedToWholeCredits: true,
+      });
+    } finally {
+      setIsEstimating(false);
+    }
+  };
+
+  const confirmStart = () => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    setShowEstimate(false);
+    setTokenEstimate(null);
+
+    setPrompt(trimmed);
+    promptRef.current = trimmed;
+    isLoopingRef.current = true;
+    autoRefineEnabledRef.current = autoRefineEnabled;
+    stopAfterCurrentRef.current = false;
+    setStopAfterCurrentResult(false);
+
+    // Reset state for a fresh run
+    latestSVGRef.current = '';
+    setCurrentSVG('');
+    resetStreamedSvgPreview();
+    currentVersionIdRef.current = '';
+    generationSessionIdRef.current = uuidv4();
+    iterationRef.current = 0;
+    phaseRef.current = AppPhase.IDLE;
+
+    setState({
+        phase: AppPhase.PLANNING,
+        currentIteration: 0,
+        lastCritique: null,
+        lastThoughts: [],
+        plan: null,
+        error: null
+    });
+
+    runRefinementLoop();
+  };
+
+  const cancelEstimate = () => {
+    setShowEstimate(false);
+    setTokenEstimate(null);
+    setIsEstimating(false);
+  };
+
+  const handleApiKeySaved = () => {
+    setHasApiKey(true);
+    gemini.resetAI(); // Reset the API client to use the new key
+  };
+
+  const handleModeChange = (mode: 'tokens' | 'apikey') => {
+    const useTokens = mode === 'tokens';
+    setAppMode(mode);
+    setIsTokenMode(useTokens);
+
+    if (useTokens && isAuthenticated) {
+      refreshBalance().then(setTokenBalance).catch(console.error);
+    }
+  };
+
+  const handleOpenApiKeyModal = () => {
+    setIsApiKeyModalOpen(true);
+  };
+
+  const handleOpenAccountModal = () => {
+    setIsAccountModalOpen(true);
+  };
+
+  const handleSignInForCredits = async () => {
+    setIsSigningIn(true);
+    try {
+      await signInWithGoogle();
+      await refreshBalance().then(setTokenBalance).catch(console.error);
+    } catch (err) {
+      if (err instanceof AuthRedirectInProgressError) {
+        return;
+      }
+      console.error('Sign in failed:', err);
+      throw err;
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    stopLoop();
+    await signOut();
+    pendingRecoveryForUidRef.current = null;
+    setTokenBalance(0);
+    setIsAuthenticated(false);
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeletingAccount(true);
+    stopLoop();
+
+    try {
+      try {
+        await deleteMyAccount();
+      } catch (error: any) {
+        console.error('Account deletion failed:', error);
+        throw new Error(error?.message || 'Account deletion failed. Please try again.');
+      }
+
+      try {
+        await signOut();
+      } catch (error: any) {
+        console.error('Sign out after account deletion failed:', error);
+        window.alert(error?.message || 'Account deleted, but sign out failed.');
+      }
+
+      try {
+        await db.clearHistory();
+      } catch (error: any) {
+        console.error('Local history cleanup after account deletion failed:', error);
+        window.alert(error?.message || 'Account deleted, but local history cleanup failed.');
+      }
+
+      pendingRecoveryForUidRef.current = null;
+      setTokenBalance(0);
+      setVersions([]);
+      setViewingVersion(null);
+      setIsAuthenticated(false);
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  const handlePurchaseComplete = () => {
+    setIsPurchaseModalOpen(false);
+    refreshBalance().then(setTokenBalance).catch(console.error);
+  };
+
+  const isThinking = state.phase !== AppPhase.IDLE &&
+                     state.phase !== AppPhase.STOPPED &&
+                     state.phase !== AppPhase.RENDERING;
+
+  return (
+    <div className="min-h-screen p-4 md:p-10 overflow-x-hidden relative">
+      <SketchSvgFilters />
+
+      {/* Corner doodles */}
+      <div className="absolute top-4 left-4 text-muted-foreground/10 hidden md:block pointer-events-none">
+        <svg width="60" height="60" viewBox="0 0 60 60">
+          <path d="M5 5 Q30 10 55 5 Q50 30 55 55 Q30 50 5 55 Q10 30 5 5" stroke="currentColor" strokeWidth="1" fill="none" />
+        </svg>
+      </div>
+      <div className="absolute bottom-4 right-4 text-muted-foreground/10 hidden md:block pointer-events-none">
+        <svg width="50" height="50" viewBox="0 0 50 50">
+          <circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="1" fill="none" strokeDasharray="3 4" />
+          <circle cx="25" cy="25" r="3" fill="currentColor" opacity="0.3" />
+        </svg>
+      </div>
+
+      <div className="max-w-[1200px] mx-auto relative z-10">
+        <Header
+          onOpenApiKeyModal={handleOpenApiKeyModal}
+          isTokenMode={isTokenMode}
+          onOpenPurchaseModal={() => setIsPurchaseModalOpen(true)}
+          canManageAccount={isAuthenticated}
+          onOpenAccountModal={handleOpenAccountModal}
+        />
+
+        <ActiveStage
+            phase={state.phase}
+            prompt={prompt}
+            setPrompt={setPrompt}
+            onStart={requestStartLoop}
+            onStop={stopLoop}
+            autoRefineEnabled={autoRefineEnabled}
+            onAutoRefineChange={handleAutoRefineToggle}
+            stopAfterCurrentResult={stopAfterCurrentResult}
+            svgCode={currentSVG}
+            canvasRef={canvasRef}
+            critique={state.lastCritique}
+            thoughts={state.lastThoughts}
+            isThinking={isThinking}
+            plan={state.plan}
+            iteration={state.currentIteration}
+            streamedSvgCode={streamedSvgCode}
+        />
+
+        {state.error && isLoopingRef.current && (
+             <div className="mb-6 p-4 bg-yellow-50/50 border border-yellow-200 text-yellow-700 text-sm font-hand sketchy-border-thin animate-pulse">
+                {state.error}
+             </div>
+        )}
+
+        <ManualEntry
+            onAdd={handleManualAdd}
+            onClear={() => {}}
+        />
+
+        <Gallery
+            versions={versions}
+            viewingId={viewingVersion?.id || null}
+            onSelect={setViewingVersion}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
+            onDelete={deleteVersions}
+        />
+
+        <footer className="mt-16 text-center">
+          <p className="font-hand text-sm text-muted-foreground/40">
+            ~ made with pencil shavings & pixels ~
+          </p>
+          <div className="mt-2 space-x-3">
+            {PRIVACY_POLICY_URL && (
+              <a
+                href={PRIVACY_POLICY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-hand text-xs text-accent underline hover:text-accent/80"
+              >
+                Privacy policy
+              </a>
+            )}
+            {SUPPORT_EMAIL && (
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="font-hand text-xs text-muted-foreground hover:text-foreground"
+              >
+                {SUPPORT_EMAIL}
+              </a>
+            )}
+          </div>
+        </footer>
+      </div>
+
+      <Modal
+        version={viewingVersion}
+        onClose={() => setViewingVersion(null)}
+      />
+
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onKeySaved={handleApiKeySaved}
+        hasApiKey={hasApiKey}
+        isTokenMode={isTokenMode}
+        isAuthenticated={isAuthenticated}
+        isSigningIn={isSigningIn}
+        onModeChange={handleModeChange}
+        onOpenPurchase={() => setIsPurchaseModalOpen(true)}
+        onSignIn={handleSignInForCredits}
+        onSignOut={handleSignOut}
+        onOpenAccount={handleOpenAccountModal}
+      />
+
+      {showEstimate && (
+        <TokenEstimate
+          estimate={tokenEstimate}
+          balance={tokenBalance}
+          isTokenMode={isTokenMode}
+          isLoading={isEstimating}
+          autoRefineEnabled={autoRefineEnabled}
+          onAutoRefineChange={setAutoRefineEnabled}
+          onConfirm={confirmStart}
+          onCancel={cancelEstimate}
+          onBuyTokens={() => {
+            cancelEstimate();
+            if (!isAuthenticated) {
+              setIsApiKeyModalOpen(true);
+              return;
+            }
+            setIsPurchaseModalOpen(true);
+          }}
+        />
+      )}
+
+      <TokenPurchase
+        isOpen={isPurchaseModalOpen}
+        onClose={() => setIsPurchaseModalOpen(false)}
+        onPurchaseComplete={handlePurchaseComplete}
+      />
+
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        isAuthenticated={isAuthenticated}
+        isDeleting={isDeletingAccount}
+        privacyPolicyUrl={PRIVACY_POLICY_URL}
+        supportEmail={SUPPORT_EMAIL}
+        onClose={() => setIsAccountModalOpen(false)}
+        onSignOut={handleSignOut}
+        onDeleteAccount={handleDeleteAccount}
+      />
+    </div>
+  );
+};
+
+export default App;

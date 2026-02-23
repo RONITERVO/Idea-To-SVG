@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sketch AI</string>
+    <string name="title_activity_main">Sketch AI</string>
+    <string name="package_name">com.ronitervo.ideatesvg</string>
+    <string name="custom_url_scheme">com.ronitervo.ideatesvg</string>
+</resources>
