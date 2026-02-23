@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Coins, ShoppingCart, Loader2 } from 'lucide-react';
 import { queryProducts, purchaseProduct, GIF_CREDIT_PACKS, type Product } from '../services/billing';
 import { verifyPurchase } from '../services/backendApi';
-import { refreshBalance } from '../services/tokenManager';
+import { refreshBalance, formatCredits } from '../services/tokenManager';
 import { isAndroid } from '../services/platform';
 import { getCurrentUser } from '../services/auth';
 
@@ -103,8 +103,8 @@ const TokenPurchase: React.FC<TokenPurchaseProps> = ({ isOpen, onClose, onPurcha
       if (verification.alreadyCredited) {
         setSuccess('This purchase was already credited to your account.');
       } else {
-        const granted = verification.creditsGranted ?? verification.tokensGranted ?? packInfo?.credits ?? 0;
-        setSuccess(`Added ${granted} GIF credits to your balance!`);
+        const granted = verification.creditsGranted ?? packInfo?.credits ?? 0;
+        setSuccess(`Added ${formatCredits(granted)} GIF credits to your balance!`);
       }
 
       if (purchaseCompleteTimerRef.current !== null) {

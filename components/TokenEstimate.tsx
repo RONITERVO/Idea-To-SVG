@@ -1,6 +1,6 @@
 import React from 'react';
 import { Calculator, AlertTriangle } from 'lucide-react';
-import { formatTokens, formatCredits } from '../services/tokenManager';
+import * as tokenManager from '../services/tokenManager';
 import type { TokenEstimateResult } from '../services/gemini';
 
 interface TokenEstimateProps {
@@ -27,6 +27,8 @@ const TokenEstimate: React.FC<TokenEstimateProps> = ({
   onBuyTokens,
 }) => {
   if (!estimate && !isLoading) return null;
+  const EPSILON = tokenManager.EPSILON;
+  const { formatTokens, formatCredits } = tokenManager;
 
   const fractionalEstimate = Math.max(0, estimate?.estimatedGifCredits || 0);
   const rawEstimatedCredits = Math.max(0, estimate?.estimatedRawGifCredits || fractionalEstimate);
@@ -35,7 +37,7 @@ const TokenEstimate: React.FC<TokenEstimateProps> = ({
     Math.ceil(estimate?.estimatedDisplayGifCredits ?? fractionalEstimate)
   );
   const roundedUpByCredits = Math.max(0, displayEstimate - fractionalEstimate);
-  const canAfford = !isTokenMode || balance >= displayEstimate;
+  const canAfford = !isTokenMode || tokenManager.canAfford(displayEstimate, balance + EPSILON);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/60 backdrop-blur-sm animate-fade-in"

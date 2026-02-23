@@ -309,6 +309,116 @@ type BillingSettlementResult = {
   pairDisplayCredits: number | null;
 };
 
+type BillingSettlementOptions = {
+  rollbackOnly?: boolean;
+  provisionalChargedCredits?: number;
+  failureReason?: string;
+};
+
+type PendingPairFieldSet = {
+  pendingCostUsdField: "pendingPlanCostUsd" | "pendingEvaluateCostUsd";
+  pendingTokensField: "pendingPlanTokens" | "pendingEvaluateTokens";
+  pendingReservedCreditsField: "pendingPlanReservedCredits" | "pendingEvaluateReservedCredits";
+};
+
+type PendingPairState = {
+  pendingCostUsd: number;
+  pendingTokens: number;
+  pendingReservedCredits: number;
+};
+
+type ValidatedGenerationContext = {
+  typedAction: BillingAction;
+  sessionId: string;
+  contents: PromptContents;
+  ai: GoogleGenAI;
+  estimatedInputTokens: number;
+  pairEstimate: ReturnType<typeof estimatePairForAction>;
+};
+
+const ZERO_USAGE_METRICS: UsageMetrics = {
+  inputTokens: 0,
+  outputTokens: 0,
+  thoughtTokens: 0,
+  totalTokens: 0,
+  totalUsd: 0,
+};
+
+const pendingPairFieldsForAction = (action: BillingAction): PendingPairFieldSet | null => {
+  if (action === "generate") {
+    return {
+      pendingCostUsdField: "pendingPlanCostUsd",
+      pendingTokensField: "pendingPlanTokens",
+      pendingReservedCreditsField: "pendingPlanReservedCredits",
+    };
+  }
+  if (action === "refine") {
+    return {
+      pendingCostUsdField: "pendingEvaluateCostUsd",
+      pendingTokensField: "pendingEvaluateTokens",
+      pendingReservedCreditsField: "pendingEvaluateReservedCredits",
+    };
+  }
+  return null;
+};
+
+const reservationFieldsForAction = (action: BillingAction): PendingPairFieldSet => {
+  if (action === "plan" || action === "generate") {
+    return {
+      pendingCostUsdField: "pendingPlanCostUsd",
+      pendingTokensField: "pendingPlanTokens",
+      pendingReservedCreditsField: "pendingPlanReservedCredits",
+    };
+  }
+  return {
+    pendingCostUsdField: "pendingEvaluateCostUsd",
+    pendingTokensField: "pendingEvaluateTokens",
+    pendingReservedCreditsField: "pendingEvaluateReservedCredits",
+  };
+};
+
+const stalePairStateError = (action: BillingAction): HttpsError => {
+  if (action === "generate") {
+    return new HttpsError(
+      "failed-precondition",
+      "Planning state is stale. Run planning again before generate."
+    );
+  }
+  if (action === "refine") {
+    return new HttpsError(
+      "failed-precondition",
+      "Evaluation state is stale. Run evaluation again before refine."
+    );
+  }
+  return new HttpsError("failed-precondition", "Pending billing state is stale. Retry the previous step.");
+};
+
+const readRequiredPendingPairState = (
+  action: BillingAction,
+  sessionData: FirebaseFirestore.DocumentData
+): PendingPairState => {
+  const fields = pendingPairFieldsForAction(action);
+  if (!fields) {
+    throw new HttpsError("invalid-argument", "Pending pair state is not required for this action");
+  }
+
+  const pendingCostUsd = Number(sessionData[fields.pendingCostUsdField]);
+  const pendingTokens = Number(sessionData[fields.pendingTokensField]);
+  const pendingReservedCredits = roundCredits(Number(sessionData[fields.pendingReservedCreditsField]) || 0);
+  const hasPendingCost = Number.isFinite(pendingCostUsd) && pendingCostUsd > EPSILON;
+  const hasPendingTokens = Number.isFinite(pendingTokens) && pendingTokens > 0;
+
+  if (!hasPendingCost || !hasPendingTokens || pendingReservedCredits <= EPSILON) {
+    throw stalePairStateError(action);
+  }
+
+  return {
+    pendingCostUsd,
+    pendingTokens,
+    pendingReservedCredits,
+  };
+};
+
 const reserveCreditsForAction = async (
   uid: string,
   sessionId: string,
@@ -336,6 +446,10 @@ const reserveCreditsForAction = async (
         : action === "refine"
           ? ceilCredits(Math.max(0, requestedReserve - currentEvaluateReservedCredits))
           : requestedReserve;
+
+    if (action === "generate" || action === "refine") {
+      readRequiredPendingPairState(action, sessionData);
+    }
 
     if (pendingGenerateDelta < 0 && currentPendingGenerate < 1) {
       throw new HttpsError(
@@ -422,11 +536,85 @@ const reserveCreditsForAction = async (
   });
 };
 
+const settleGifOrEvaluate = ({
+  action,
+  fields,
+  userRef,
+  sessionRef,
+  sessionData,
+  usage,
+  currentBalance,
+  tx,
+}: {
+  action: "generate" | "refine";
+  fields: PendingPairFieldSet;
+  userRef: FirebaseFirestore.DocumentReference;
+  sessionRef: FirebaseFirestore.DocumentReference;
+  sessionData: FirebaseFirestore.DocumentData;
+  usage: UsageMetrics;
+  currentBalance: number;
+  tx: FirebaseFirestore.Transaction;
+}): {
+  remainingBalance: number;
+  additionalChargedCredits: number;
+  pairCreditsCharged: number;
+  pairRawCredits: number;
+  pairDisplayCredits: number;
+} => {
+  const pendingState = readRequiredPendingPairState(action, sessionData);
+  const pairCostUsd = pendingState.pendingCostUsd + usage.totalUsd;
+  const pairTokens = pendingState.pendingTokens + usage.totalTokens;
+  const pairBilling = computeGifBilling(pairCostUsd);
+  const pairCredits = pairBilling.billedCredits;
+  const additionalCredits = ceilCredits(Math.max(0, pairCredits - pendingState.pendingReservedCredits));
+  const newBalance = roundCredits(currentBalance - additionalCredits);
+
+  tx.set(
+    userRef,
+    {
+      balance: newBalance,
+      gifBalance: newBalance,
+      totalConsumed: admin.firestore.FieldValue.increment(additionalCredits),
+      creditDebt: roundCredits(Math.max(0, -newBalance)),
+      hasNegativeBalance: newBalance < 0,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  tx.set(
+    sessionRef,
+    {
+      [fields.pendingCostUsdField]: 0,
+      [fields.pendingTokensField]: 0,
+      [fields.pendingReservedCreditsField]: 0,
+      lastGifCreditsCharged: pairCredits,
+      lastGifRawCredits: pairBilling.rawCredits,
+      lastDisplayGifCredits: pairBilling.displayCredits,
+      lastCreditRoundingMode: `ceil_fractional_${CREDIT_DECIMALS}dp_show_whole`,
+      lastGifCostUsd: pairCostUsd,
+      lastGifTokens: pairTokens,
+      creditsConsumed: admin.firestore.FieldValue.increment(additionalCredits),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    remainingBalance: newBalance,
+    additionalChargedCredits: additionalCredits,
+    pairCreditsCharged: pairCredits,
+    pairRawCredits: pairBilling.rawCredits,
+    pairDisplayCredits: pairBilling.displayCredits,
+  };
+};
+
 const settleActionBilling = async (
   uid: string,
   sessionId: string,
   action: BillingAction,
-  usage: UsageMetrics
+  usage: UsageMetrics,
+  options?: BillingSettlementOptions
 ): Promise<BillingSettlementResult> => {
   const userRef = db.collection("users").doc(uid);
   const sessionRef = getSessionRef(uid, sessionId);
@@ -435,7 +623,68 @@ const settleActionBilling = async (
     const [userDoc, sessionDoc] = await Promise.all([tx.get(userRef), tx.get(sessionRef)]);
     const currentBalance = userDoc.exists ? roundCredits(Number(userDoc.data()?.balance) || 0) : 0;
     const sessionData = sessionDoc.data() || {};
-    let newBalance = currentBalance;
+
+    if (options?.rollbackOnly) {
+      const refundCredits = roundCredits(Math.max(0, options.provisionalChargedCredits || 0));
+      const currentPendingGenerate = sessionDoc.exists ? (Number(sessionData.pendingGenerate) || 0) : 0;
+      const currentPendingRefine = sessionDoc.exists ? (Number(sessionData.pendingRefine) || 0) : 0;
+      const pendingGenerateDelta = action === "plan" ? -1 : action === "generate" ? 1 : 0;
+      const pendingRefineDelta = action === "evaluate" ? -1 : action === "refine" ? 1 : 0;
+      const newBalance = roundCredits(currentBalance + refundCredits);
+
+      if (refundCredits > 0) {
+        tx.set(
+          userRef,
+          {
+            balance: newBalance,
+            gifBalance: newBalance,
+            totalConsumed: admin.firestore.FieldValue.increment(-refundCredits),
+            creditDebt: roundCredits(Math.max(0, -newBalance)),
+            hasNegativeBalance: newBalance < 0,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...(userDoc.exists ? {} : {
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              totalPurchased: 0,
+            }),
+          },
+          { merge: true }
+        );
+      }
+
+      const rollbackFields = reservationFieldsForAction(action);
+      const currentReserved = roundCredits(Number(sessionData[rollbackFields.pendingReservedCreditsField]) || 0);
+      const sessionUpdate: Record<string, unknown> = {
+        uid,
+        sessionId,
+        status: "active",
+        pendingGenerate: Math.max(0, currentPendingGenerate + pendingGenerateDelta),
+        pendingRefine: Math.max(0, currentPendingRefine + pendingRefineDelta),
+        [rollbackFields.pendingReservedCreditsField]: roundCredits(Math.max(0, currentReserved - refundCredits)),
+        lastFailedAction: action,
+        lastFailureReason: options.failureReason || "action_failed",
+        lastFailedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(sessionDoc.exists ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+      };
+
+      if (action === "plan" || action === "evaluate") {
+        sessionUpdate[rollbackFields.pendingCostUsdField] = 0;
+        sessionUpdate[rollbackFields.pendingTokensField] = 0;
+      }
+      if (refundCredits > 0) {
+        sessionUpdate.creditsConsumed = admin.firestore.FieldValue.increment(-refundCredits);
+      }
+
+      tx.set(sessionRef, sessionUpdate, { merge: true });
+
+      return {
+        remainingBalance: newBalance,
+        additionalChargedCredits: 0,
+        pairCreditsCharged: null,
+        pairRawCredits: null,
+        pairDisplayCredits: null,
+      };
+    }
 
     if (action === "plan") {
       tx.set(
@@ -448,7 +697,7 @@ const settleActionBilling = async (
         { merge: true }
       );
       return {
-        remainingBalance: newBalance,
+        remainingBalance: currentBalance,
         additionalChargedCredits: 0,
         pairCreditsCharged: null,
         pairRawCredits: null,
@@ -467,7 +716,7 @@ const settleActionBilling = async (
         { merge: true }
       );
       return {
-        remainingBalance: newBalance,
+        remainingBalance: currentBalance,
         additionalChargedCredits: 0,
         pairCreditsCharged: null,
         pairRawCredits: null,
@@ -475,106 +724,28 @@ const settleActionBilling = async (
       };
     }
 
-    if (action === "generate") {
-      const pendingPlanCostUsd = Number(sessionData.pendingPlanCostUsd) || 0;
-      const pendingPlanTokens = Number(sessionData.pendingPlanTokens) || 0;
-      const reservedCredits = roundCredits(Number(sessionData.pendingPlanReservedCredits) || 0);
-
-      const pairCostUsd = pendingPlanCostUsd + usage.totalUsd;
-      const pairTokens = pendingPlanTokens + usage.totalTokens;
-      const pairBilling = computeGifBilling(pairCostUsd);
-      const pairCredits = pairBilling.billedCredits;
-      const additionalCredits = ceilCredits(Math.max(0, pairCredits - reservedCredits));
-      newBalance = roundCredits(currentBalance - additionalCredits);
-
-      tx.set(
-        userRef,
-        {
-          balance: newBalance,
-          gifBalance: newBalance,
-          totalConsumed: admin.firestore.FieldValue.increment(additionalCredits),
-          creditDebt: roundCredits(Math.max(0, -newBalance)),
-          hasNegativeBalance: newBalance < 0,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      tx.set(
-        sessionRef,
-        {
-          pendingPlanCostUsd: 0,
-          pendingPlanTokens: 0,
-          pendingPlanReservedCredits: 0,
-          lastGifCreditsCharged: pairCredits,
-          lastGifRawCredits: pairBilling.rawCredits,
-          lastDisplayGifCredits: pairBilling.displayCredits,
-          lastCreditRoundingMode: `ceil_fractional_${CREDIT_DECIMALS}dp_show_whole`,
-          lastGifCostUsd: pairCostUsd,
-          lastGifTokens: pairTokens,
-          creditsConsumed: admin.firestore.FieldValue.increment(additionalCredits),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      return {
-        remainingBalance: newBalance,
-        additionalChargedCredits: additionalCredits,
-        pairCreditsCharged: pairCredits,
-        pairRawCredits: pairBilling.rawCredits,
-        pairDisplayCredits: pairBilling.displayCredits,
-      };
+    const fields = pendingPairFieldsForAction(action);
+    if (!fields) {
+      throw new HttpsError("failed-precondition", "Unsupported billing action for settlement");
     }
 
-    const pendingEvaluateCostUsd = Number(sessionData.pendingEvaluateCostUsd) || 0;
-    const pendingEvaluateTokens = Number(sessionData.pendingEvaluateTokens) || 0;
-    const reservedCredits = roundCredits(Number(sessionData.pendingEvaluateReservedCredits) || 0);
-
-    const pairCostUsd = pendingEvaluateCostUsd + usage.totalUsd;
-    const pairTokens = pendingEvaluateTokens + usage.totalTokens;
-    const pairBilling = computeGifBilling(pairCostUsd);
-    const pairCredits = pairBilling.billedCredits;
-    const additionalCredits = ceilCredits(Math.max(0, pairCredits - reservedCredits));
-    newBalance = roundCredits(currentBalance - additionalCredits);
-
-    tx.set(
+    const settled = settleGifOrEvaluate({
+      action,
+      fields,
       userRef,
-      {
-        balance: newBalance,
-        gifBalance: newBalance,
-        totalConsumed: admin.firestore.FieldValue.increment(additionalCredits),
-        creditDebt: roundCredits(Math.max(0, -newBalance)),
-        hasNegativeBalance: newBalance < 0,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    tx.set(
       sessionRef,
-      {
-        pendingEvaluateCostUsd: 0,
-        pendingEvaluateTokens: 0,
-        pendingEvaluateReservedCredits: 0,
-        lastGifCreditsCharged: pairCredits,
-        lastGifRawCredits: pairBilling.rawCredits,
-        lastDisplayGifCredits: pairBilling.displayCredits,
-        lastCreditRoundingMode: `ceil_fractional_${CREDIT_DECIMALS}dp_show_whole`,
-        lastGifCostUsd: pairCostUsd,
-        lastGifTokens: pairTokens,
-        creditsConsumed: admin.firestore.FieldValue.increment(additionalCredits),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+      sessionData,
+      usage,
+      currentBalance,
+      tx,
+    });
 
     return {
-      remainingBalance: newBalance,
-      additionalChargedCredits: additionalCredits,
-      pairCreditsCharged: pairCredits,
-      pairRawCredits: pairBilling.rawCredits,
-      pairDisplayCredits: pairBilling.displayCredits,
+      remainingBalance: settled.remainingBalance,
+      additionalChargedCredits: settled.additionalChargedCredits,
+      pairCreditsCharged: settled.pairCreditsCharged,
+      pairRawCredits: settled.pairRawCredits,
+      pairDisplayCredits: settled.pairDisplayCredits,
     };
   });
 };
@@ -926,6 +1097,154 @@ export const getBalance = onCall(
 
 // ===== GENERATE WITH GIF CREDITS =====
 
+const validateAndBuildContents = async (
+  rawData: Record<string, unknown>
+): Promise<ValidatedGenerationContext> => {
+  const actionRaw = rawData.action;
+  const sessionIdRaw = rawData.sessionId;
+
+  if (typeof actionRaw !== "string" || !BILLING_ACTIONS.includes(actionRaw as BillingAction)) {
+    throw new HttpsError("invalid-argument", "Invalid action");
+  }
+  if (!isValidSessionId(sessionIdRaw)) {
+    throw new HttpsError("invalid-argument", "A valid sessionId is required");
+  }
+
+  const typedAction = actionRaw as BillingAction;
+  const sessionId = sessionIdRaw;
+  const contents = buildPromptForAction(typedAction, {
+    prompt: typeof rawData.prompt === "string" ? rawData.prompt : undefined,
+    svgCode: typeof rawData.svgCode === "string" ? rawData.svgCode : undefined,
+    critique: typeof rawData.critique === "string" ? rawData.critique : undefined,
+    plan: typeof rawData.plan === "string" ? rawData.plan : undefined,
+    iteration: typeof rawData.iteration === "number" ? rawData.iteration : undefined,
+    imageBase64: typeof rawData.imageBase64 === "string" ? rawData.imageBase64 : undefined,
+  });
+
+  const ai = getGeminiClient();
+  const countResult = await ai.models.countTokens({
+    model: MODEL,
+    contents,
+  });
+  const estimatedInputTokens = countResult.totalTokens || 0;
+  assertInputTokenCap(estimatedInputTokens);
+  const pairEstimate = estimatePairForAction(typedAction, estimatedInputTokens);
+
+  return {
+    typedAction,
+    sessionId,
+    contents,
+    ai,
+    estimatedInputTokens,
+    pairEstimate,
+  };
+};
+
+const computeProvisionalReserve = async (
+  uid: string,
+  sessionId: string,
+  typedAction: BillingAction,
+  pairEstimate: ReturnType<typeof estimatePairForAction>
+): Promise<ReservationResult> => {
+  let provisionalReserveTarget = 0;
+
+  if (isChargeAction(typedAction)) {
+    provisionalReserveTarget = creditsForGifOutput(pairEstimate.pairUsd);
+  } else {
+    const sessionSnap = await getSessionRef(uid, sessionId).get();
+    const sessionData = sessionSnap.data() || {};
+    const pendingState = readRequiredPendingPairState(typedAction, sessionData);
+    provisionalReserveTarget = creditsForGifOutput(pendingState.pendingCostUsd + pairEstimate.pairUsd);
+  }
+
+  return reserveCreditsForAction(
+    uid,
+    sessionId,
+    typedAction,
+    provisionalReserveTarget
+  );
+};
+
+const finalizeBillingAndPersist = async (
+  uid: string,
+  sessionId: string,
+  typedAction: BillingAction,
+  usageMetrics: UsageMetrics
+): Promise<BillingSettlementResult> => {
+  const settlement = await settleActionBilling(uid, sessionId, typedAction, usageMetrics);
+  const userRef = db.collection("users").doc(uid);
+  const sessionRef = getSessionRef(uid, sessionId);
+
+  await Promise.all([
+    userRef.set(
+      {
+        totalTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.totalTokens),
+        totalInputTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.inputTokens),
+        totalOutputTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.outputTokens),
+        totalThoughtTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.thoughtTokens),
+        lastActionCostUsd: usageMetrics.totalUsd,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    sessionRef.set(
+      {
+        lastCompletedAction: typedAction,
+        totalTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.totalTokens),
+        totalInputTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.inputTokens),
+        totalOutputTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.outputTokens),
+        totalThoughtTokenUsage: admin.firestore.FieldValue.increment(usageMetrics.thoughtTokens),
+        lastActionCostUsd: usageMetrics.totalUsd,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]).catch((persistError) => {
+    console.error("Failed to persist usage analytics after billing settlement:", {
+      uid,
+      action: typedAction,
+      sessionId,
+      persistError,
+    });
+  });
+
+  return settlement;
+};
+
+const rollbackFailedReservation = async (
+  uid: string,
+  sessionId: string,
+  typedAction: BillingAction,
+  reservation: ReservationResult | null,
+  error: unknown
+): Promise<void> => {
+  if (!reservation) return;
+
+  try {
+    await settleActionBilling(
+      uid,
+      sessionId,
+      typedAction,
+      ZERO_USAGE_METRICS,
+      {
+        rollbackOnly: true,
+        provisionalChargedCredits: reservation.provisionalChargedCredits,
+        failureReason: error instanceof HttpsError
+          ? error.message
+          : ((error as { message?: string } | null | undefined)?.message || "generation_failed"),
+      }
+    );
+  } catch (rollbackError) {
+    console.error("Failed to rollback reserved credits after generation failure:", {
+      uid,
+      action: typedAction,
+      sessionId,
+      provisionalChargedCredits: reservation.provisionalChargedCredits,
+      rollbackError,
+    });
+  }
+};
+
 export const generateWithTokens = onCall(
   { enforceAppCheck: ENFORCE_APP_CHECK, timeoutSeconds: 600 },
   async (request) => {
@@ -933,52 +1252,9 @@ export const generateWithTokens = onCall(
       throw new HttpsError("unauthenticated", "Must be signed in");
     }
     const uid = request.auth.uid;
-    const { action, prompt, svgCode, critique, plan, imageBase64, iteration, sessionId } = request.data;
-
-    if (typeof action !== "string" || !BILLING_ACTIONS.includes(action as BillingAction)) {
-      throw new HttpsError("invalid-argument", "Invalid action");
-    }
-    if (!isValidSessionId(sessionId)) {
-      throw new HttpsError("invalid-argument", "A valid sessionId is required");
-    }
-    const typedAction = action as BillingAction;
-
-    const contents = buildPromptForAction(typedAction, {
-      prompt,
-      svgCode,
-      critique,
-      plan,
-      iteration,
-      imageBase64,
-    });
-
-    const ai = getGeminiClient();
-    const countResult = await ai.models.countTokens({
-      model: MODEL,
-      contents,
-    });
-    const estimatedInputTokens = countResult.totalTokens || 0;
-    assertInputTokenCap(estimatedInputTokens);
-
-    const pairEstimate = estimatePairForAction(typedAction, estimatedInputTokens);
-    let provisionalReserveTarget = 0;
-    if (isChargeAction(typedAction)) {
-      provisionalReserveTarget = creditsForGifOutput(pairEstimate.pairUsd);
-    } else {
-      const sessionSnap = await getSessionRef(uid, sessionId).get();
-      const sessionData = sessionSnap.data() || {};
-      const pendingPairUsd = typedAction === "generate"
-        ? Number(sessionData.pendingPlanCostUsd) || 0
-        : Number(sessionData.pendingEvaluateCostUsd) || 0;
-      provisionalReserveTarget = creditsForGifOutput(pendingPairUsd + pairEstimate.pairUsd);
-    }
-
-    const reservation = await reserveCreditsForAction(
-      uid,
-      sessionId,
-      typedAction,
-      provisionalReserveTarget
-    );
+    const data = (request.data || {}) as Record<string, unknown>;
+    const { typedAction, sessionId, contents, ai, pairEstimate } = await validateAndBuildContents(data);
+    const reservation = await computeProvisionalReserve(uid, sessionId, typedAction, pairEstimate);
 
     try {
       // Call Gemini API
@@ -1009,36 +1285,7 @@ export const generateWithTokens = onCall(
         totalTokens: totalUsed,
         totalUsd: actionUsageCostUsd({ inputTokens, outputTokens, thoughtTokens }),
       };
-
-      const userRef = db.collection("users").doc(uid);
-      const sessionRef = getSessionRef(uid, sessionId);
-      const settlement = await settleActionBilling(uid, sessionId, typedAction, usageMetrics);
-
-      await Promise.all([
-        userRef.set(
-          {
-            totalTokenUsage: admin.firestore.FieldValue.increment(totalUsed),
-            totalInputTokenUsage: admin.firestore.FieldValue.increment(inputTokens),
-            totalOutputTokenUsage: admin.firestore.FieldValue.increment(outputTokens),
-            totalThoughtTokenUsage: admin.firestore.FieldValue.increment(thoughtTokens),
-            lastActionCostUsd: usageMetrics.totalUsd,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        ),
-        sessionRef.set(
-          {
-            lastCompletedAction: typedAction,
-            totalTokenUsage: admin.firestore.FieldValue.increment(totalUsed),
-            totalInputTokenUsage: admin.firestore.FieldValue.increment(inputTokens),
-            totalOutputTokenUsage: admin.firestore.FieldValue.increment(outputTokens),
-            totalThoughtTokenUsage: admin.firestore.FieldValue.increment(thoughtTokens),
-            lastActionCostUsd: usageMetrics.totalUsd,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        ),
-      ]);
+      const settlement = await finalizeBillingAndPersist(uid, sessionId, typedAction, usageMetrics);
 
       return {
         text,
@@ -1057,6 +1304,7 @@ export const generateWithTokens = onCall(
         billingRoundedToWholeCredits: false,
       };
     } catch (error) {
+      await rollbackFailedReservation(uid, sessionId, typedAction, reservation, error);
       if (error instanceof HttpsError) {
         throw error;
       }
@@ -1094,6 +1342,7 @@ export const streamGenerateWithTokens = onRequest(
     let uidForLog: string | null = null;
     let actionForLog: BillingAction | null = null;
     let sessionIdForLog: string | null = null;
+    let reservationForRollback: ReservationResult | null = null;
 
     try {
       await verifyAppCheckFromRequest(req);
@@ -1101,62 +1350,19 @@ export const streamGenerateWithTokens = onRequest(
       uidForLog = uid;
 
       const body = parseCallableBody(req.body);
-      const actionRaw = body.action;
-      const prompt = typeof body.prompt === "string" ? body.prompt : undefined;
-      const svgCode = typeof body.svgCode === "string" ? body.svgCode : undefined;
-      const critique = typeof body.critique === "string" ? body.critique : undefined;
-      const plan = typeof body.plan === "string" ? body.plan : undefined;
-      const imageBase64 = typeof body.imageBase64 === "string" ? body.imageBase64 : undefined;
-      const iteration = typeof body.iteration === "number" ? body.iteration : undefined;
-      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
-
-      if (typeof actionRaw !== "string" || !BILLING_ACTIONS.includes(actionRaw as BillingAction)) {
-        throw new HttpsError("invalid-argument", "Invalid action");
-      }
-      if (!isValidSessionId(sessionId)) {
-        throw new HttpsError("invalid-argument", "A valid sessionId is required");
-      }
-
-      const typedAction = actionRaw as BillingAction;
+      const {
+        typedAction,
+        sessionId,
+        contents,
+        ai,
+        pairEstimate,
+        estimatedInputTokens,
+      } = await validateAndBuildContents(body);
       actionForLog = typedAction;
       sessionIdForLog = sessionId;
 
-      const contents = buildPromptForAction(typedAction, {
-        prompt,
-        svgCode,
-        critique,
-        plan,
-        iteration,
-        imageBase64,
-      });
-
-      const ai = getGeminiClient();
-      const countResult = await ai.models.countTokens({
-        model: MODEL,
-        contents,
-      });
-      const estimatedInputTokens = countResult.totalTokens || 0;
-      assertInputTokenCap(estimatedInputTokens);
-
-      const pairEstimate = estimatePairForAction(typedAction, estimatedInputTokens);
-      let provisionalReserveTarget = 0;
-      if (isChargeAction(typedAction)) {
-        provisionalReserveTarget = creditsForGifOutput(pairEstimate.pairUsd);
-      } else {
-        const sessionSnap = await getSessionRef(uid, sessionId).get();
-        const sessionData = sessionSnap.data() || {};
-        const pendingPairUsd = typedAction === "generate"
-          ? Number(sessionData.pendingPlanCostUsd) || 0
-          : Number(sessionData.pendingEvaluateCostUsd) || 0;
-        provisionalReserveTarget = creditsForGifOutput(pendingPairUsd + pairEstimate.pairUsd);
-      }
-
-      const reservation = await reserveCreditsForAction(
-        uid,
-        sessionId,
-        typedAction,
-        provisionalReserveTarget
-      );
+      const reservation = await computeProvisionalReserve(uid, sessionId, typedAction, pairEstimate);
+      reservationForRollback = reservation;
       provisionalChargedCredits = reservation.provisionalChargedCredits;
 
       res.status(200);
@@ -1181,109 +1387,86 @@ export const streamGenerateWithTokens = onRequest(
         }
       }, 15_000);
 
-      const stream = await ai.models.generateContentStream({
-        model: MODEL,
-        contents,
-        config: {
-          thinkingConfig: { includeThoughts: true },
-        },
-      });
+      try {
+        const stream = await ai.models.generateContentStream({
+          model: MODEL,
+          contents,
+          config: {
+            thinkingConfig: { includeThoughts: true },
+          },
+        });
 
-      let text = "";
-      let thoughts = "";
-      let usageMetadata: any = null;
+        let text = "";
+        let thoughts = "";
+        let usageMetadata: any = null;
 
-      writeSseEvent(res, "status", { stage: "generating" });
+        writeSseEvent(res, "status", { stage: "generating" });
 
-      for await (const chunk of stream) {
-        const parts = chunk.candidates?.[0]?.content?.parts;
-        if (!parts) continue;
+        for await (const chunk of stream) {
+          const parts = chunk.candidates?.[0]?.content?.parts;
+          if (!parts) continue;
 
-        for (const part of parts) {
-          if (part.thought && part.text) {
-            thoughts += part.text;
-            writeSseEvent(res, "thought", { chunk: part.text });
-          } else if (part.text) {
-            text += part.text;
-            writeSseEvent(res, "output", { chunk: part.text });
+          for (const part of parts) {
+            if (part.thought && part.text) {
+              thoughts += part.text;
+              writeSseEvent(res, "thought", { chunk: part.text });
+            } else if (part.text) {
+              text += part.text;
+              writeSseEvent(res, "output", { chunk: part.text });
+            }
+          }
+
+          if (chunk.usageMetadata) {
+            usageMetadata = chunk.usageMetadata;
           }
         }
 
-        if (chunk.usageMetadata) {
-          usageMetadata = chunk.usageMetadata;
-        }
+        const usageInputTokens = usageMetadata?.promptTokenCount || 0;
+        const usageOutputTokens = usageMetadata?.candidatesTokenCount || 0;
+        const usageThoughtTokens = usageMetadata?.thoughtsTokenCount || 0;
+        const usageTotalTokens = usageMetadata?.totalTokenCount || 0;
+        const hasUsageMetadata = usageInputTokens > 0 || usageOutputTokens > 0 || usageThoughtTokens > 0 || usageTotalTokens > 0;
+
+        const inputTokens = hasUsageMetadata ? usageInputTokens : estimatedInputTokens;
+        const outputTokens = hasUsageMetadata
+          ? usageOutputTokens
+          : (OUTPUT_ESTIMATES[typedAction] || 0);
+        const thoughtTokens = hasUsageMetadata ? usageThoughtTokens : 0;
+        const totalUsed = hasUsageMetadata
+          ? (usageTotalTokens || (inputTokens + outputTokens + thoughtTokens))
+          : (inputTokens + outputTokens + thoughtTokens);
+        const usageMetrics: UsageMetrics = {
+          inputTokens,
+          outputTokens,
+          thoughtTokens,
+          totalTokens: totalUsed,
+          totalUsd: actionUsageCostUsd({ inputTokens, outputTokens, thoughtTokens }),
+        };
+
+        const settlement = await finalizeBillingAndPersist(uid, sessionId, typedAction, usageMetrics);
+
+        writeSseEvent(res, "complete", {
+          text,
+          thoughts: thoughts || null,
+          tokensUsed: totalUsed,
+          remainingBalance: settlement.remainingBalance,
+          chargedCreditsThisAction: roundCredits(
+            reservation.provisionalChargedCredits + settlement.additionalChargedCredits
+          ),
+          additionalChargedCredits: settlement.additionalChargedCredits,
+          finalGifCreditsForPair: settlement.pairCreditsCharged,
+          rawGifCreditsForPair: settlement.pairRawCredits,
+          displayGifCreditsForPair: settlement.pairDisplayCredits,
+          billingDisplayWholeCredits: true,
+          creditPrecisionDecimals: CREDIT_DECIMALS,
+          usageEstimatedFallback: !hasUsageMetadata,
+          billingRoundedToWholeCredits: false,
+        });
+        res.end();
+      } catch (error) {
+        await rollbackFailedReservation(uid, sessionId, typedAction, reservationForRollback, error);
+        throw error;
       }
-
-      const usageInputTokens = usageMetadata?.promptTokenCount || 0;
-      const usageOutputTokens = usageMetadata?.candidatesTokenCount || 0;
-      const usageThoughtTokens = usageMetadata?.thoughtsTokenCount || 0;
-      const usageTotalTokens = usageMetadata?.totalTokenCount || 0;
-      const hasUsageMetadata = usageInputTokens > 0 || usageOutputTokens > 0 || usageThoughtTokens > 0 || usageTotalTokens > 0;
-
-      const inputTokens = hasUsageMetadata ? usageInputTokens : estimatedInputTokens;
-      const outputTokens = hasUsageMetadata
-        ? usageOutputTokens
-        : (OUTPUT_ESTIMATES[typedAction] || 0);
-      const thoughtTokens = hasUsageMetadata ? usageThoughtTokens : 0;
-      const totalUsed = hasUsageMetadata
-        ? (usageTotalTokens || (inputTokens + outputTokens + thoughtTokens))
-        : (inputTokens + outputTokens + thoughtTokens);
-      const usageMetrics: UsageMetrics = {
-        inputTokens,
-        outputTokens,
-        thoughtTokens,
-        totalTokens: totalUsed,
-        totalUsd: actionUsageCostUsd({ inputTokens, outputTokens, thoughtTokens }),
-      };
-
-      const userRef = db.collection("users").doc(uid);
-      const sessionRef = getSessionRef(uid, sessionId);
-      const settlement = await settleActionBilling(uid, sessionId, typedAction, usageMetrics);
-
-      await Promise.all([
-        userRef.set(
-          {
-            totalTokenUsage: admin.firestore.FieldValue.increment(totalUsed),
-            totalInputTokenUsage: admin.firestore.FieldValue.increment(inputTokens),
-            totalOutputTokenUsage: admin.firestore.FieldValue.increment(outputTokens),
-            totalThoughtTokenUsage: admin.firestore.FieldValue.increment(thoughtTokens),
-            lastActionCostUsd: usageMetrics.totalUsd,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        ),
-        sessionRef.set(
-          {
-            lastCompletedAction: typedAction,
-            totalTokenUsage: admin.firestore.FieldValue.increment(totalUsed),
-            totalInputTokenUsage: admin.firestore.FieldValue.increment(inputTokens),
-            totalOutputTokenUsage: admin.firestore.FieldValue.increment(outputTokens),
-            totalThoughtTokenUsage: admin.firestore.FieldValue.increment(thoughtTokens),
-            lastActionCostUsd: usageMetrics.totalUsd,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        ),
-      ]);
-
-      writeSseEvent(res, "complete", {
-        text,
-        thoughts: thoughts || null,
-        tokensUsed: totalUsed,
-        remainingBalance: settlement.remainingBalance,
-        chargedCreditsThisAction: roundCredits(
-          reservation.provisionalChargedCredits + settlement.additionalChargedCredits
-        ),
-        additionalChargedCredits: settlement.additionalChargedCredits,
-        finalGifCreditsForPair: settlement.pairCreditsCharged,
-        rawGifCreditsForPair: settlement.pairRawCredits,
-        displayGifCreditsForPair: settlement.pairDisplayCredits,
-        billingDisplayWholeCredits: true,
-        creditPrecisionDecimals: CREDIT_DECIMALS,
-        usageEstimatedFallback: !hasUsageMetadata,
-        billingRoundedToWholeCredits: false,
-      });
-      res.end();
     } catch (error: any) {
       if (heartbeat) {
         clearInterval(heartbeat);

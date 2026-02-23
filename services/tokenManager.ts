@@ -6,8 +6,8 @@ let cachedBalance: number | null = null;
 let listeners: BalanceListener[] = [];
 const CREDIT_DECIMALS = 3;
 const CREDIT_FACTOR = 10 ** CREDIT_DECIMALS;
-const EPSILON = 1e-9;
-const normalizeCredits = (value: number): number => {
+export const EPSILON = 1e-9;
+export const normalizeCredits = (value: number): number => {
   if (!Number.isFinite(value)) return 0;
   return Math.round(Math.max(0, value) * CREDIT_FACTOR) / CREDIT_FACTOR;
 };
@@ -26,8 +26,9 @@ export const updateLocalBalance = (newBalance: number): void => {
   notifyListeners();
 };
 
-export const canAfford = (estimatedCost: number): boolean => {
-  return cachedBalance !== null && cachedBalance + EPSILON >= normalizeCredits(estimatedCost);
+export const canAfford = (estimatedCost: number, balanceOverride?: number): boolean => {
+  const availableBalance = balanceOverride ?? cachedBalance;
+  return availableBalance !== null && normalizeCredits(availableBalance) + EPSILON >= normalizeCredits(estimatedCost);
 };
 
 export const subscribeToBalance = (listener: BalanceListener): (() => void) => {
