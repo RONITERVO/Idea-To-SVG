@@ -23,7 +23,11 @@ class BillingPlugin : Plugin() {
     override fun load() {
         billingClient = BillingClient.newBuilder(context)
             .setListener(purchasesUpdatedListener)
-            .enablePendingPurchases()
+            .enablePendingPurchases(
+                PendingPurchasesParams.newBuilder()
+                    .enableOneTimeProducts()
+                    .build()
+            )
             .build()
 
         startConnection()
@@ -140,7 +144,8 @@ class BillingPlugin : Plugin() {
                 .setProductList(productList)
                 .build()
 
-            billingClient?.queryProductDetailsAsync(params) { billingResult, productDetailsList ->
+            billingClient?.queryProductDetailsAsync(params) { billingResult, queryProductDetailsResult ->
+                val productDetailsList = queryProductDetailsResult.productDetailsList
                 if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {
                     val products = JSArray()
                     for (details in productDetailsList) {
@@ -195,7 +200,8 @@ class BillingPlugin : Plugin() {
                 .setProductList(productList)
                 .build()
 
-            billingClient?.queryProductDetailsAsync(params) { billingResult, productDetailsList ->
+            billingClient?.queryProductDetailsAsync(params) { billingResult, queryProductDetailsResult ->
+                val productDetailsList = queryProductDetailsResult.productDetailsList
                 if (billingResult.responseCode != BillingClient.BillingResponseCode.OK || productDetailsList.isEmpty()) {
                     call.reject("Product not found: $productId")
                     return@queryProductDetailsAsync

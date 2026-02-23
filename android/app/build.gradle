@@ -27,6 +27,15 @@ android {
         }
     }
 
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+
     signingConfigs {
         release {
             if (keystorePropertiesFile.exists()) {
@@ -75,7 +84,7 @@ dependencies {
     implementation project(':capacitor-android')
 
     // Google Play Billing
-    implementation "com.android.billingclient:billing-ktx:7.1.1"
+    implementation "com.android.billingclient:billing-ktx:8.3.0"
 
     // Firebase
     implementation platform('com.google.firebase:firebase-bom:34.9.0')
